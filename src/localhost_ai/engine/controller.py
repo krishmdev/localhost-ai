@@ -114,9 +114,10 @@ def p95(values: list[float]) -> float:
 
 def kv_ceiling(mem: MemSnapshot, reserve: float, kv_in_use: int, bytes_per_token: int,
                est_seq_len: int) -> int:
-    """How many rows of `est_seq_len` tokens fit in memory: everything below the reserve line,
-    minus what's used by things other than the KV cache, divided by the per-row KV size."""
-    budget = mem.limit * (1.0 - reserve) - mem.used + kv_in_use
+    """How many rows of `est_seq_len` tokens fit: current headroom minus the reserve, plus the
+    KV we already hold (it would be reused), divided by the per-row KV size. Uses headroom rather
+    than limit - used so that on unified memory the OS's available memory also counts."""
+    budget = mem.headroom - reserve * mem.limit + kv_in_use
     per_row = max(1, bytes_per_token * max(1, est_seq_len))
     return max(0, math.floor(budget / per_row))
 
