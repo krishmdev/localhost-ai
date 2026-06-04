@@ -1,0 +1,20 @@
+# Model presets. Every entry is pinned to a Hub commit; `make models` downloads the pinned files
+# into .models/ and checks them against models.lock.
+default: smollm2-135m
+models:
+  smollm2-135m:
+    repo: HuggingFaceTB/SmolLM2-135M-Instruct
+    revision: 12fd25f77366fa6b3b4b768ec3050bf629380bac
+    license: apache-2.0
+    max_new_tokens: 256
+  smollm2-360m:
+    repo: HuggingFaceTB/SmolLM2-360M-Instruct
+    revision: a10cc1512eabd3dde888204e902eca88bddb4951
+    license: apache-2.0
+    max_new_tokens: 256
+  qwen2.5-0.5b:
+    repo: Qwen/Qwen2.5-0.5B-Instruct
+    revision: 7ae557604adf67be50417f59c2c2f167def9a775
+    license: apache-2.0
+    dtype: bf16
+    max_new_tokens: 256

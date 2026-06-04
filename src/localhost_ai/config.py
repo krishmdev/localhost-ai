@@ -14,6 +14,8 @@ class Settings(BaseSettings):
 
     model: str = "smollm2-135m"
     models_file: Path = REPO_ROOT / "models.yaml"
+    models_dir: Path = REPO_ROOT / ".models"
+    models_lock: Path = REPO_ROOT / "models.lock"
     device: Literal["auto", "cuda", "mps", "cpu"] = "auto"
     dtype: Literal["auto", "fp32", "fp16", "bf16"] = "auto"
     quantization: Literal["none", "bnb8", "bnb4"] = "none"
