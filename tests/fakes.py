@@ -98,3 +98,25 @@ def reference(prompt: list[int], max_tokens: int, eos_after: int | None = None) 
         if t == EOS:
             break
     return out
+
+
+def fake_service(runner: FakeRunner | None = None, probe=None, **settings):
+    """A Service around the fake runner, for API tests."""
+    from localhost_ai.config import Settings
+    from localhost_ai.memory import FakeProbe
+    from localhost_ai.metrics import EngineMetrics
+    from localhost_ai.service import ModelParts, Service
+
+    tok = FakeTokenizer()
+
+    def encode_chat(messages):
+        return tok.encode(" ".join(m["content"] for m in messages))[:64] or [0]
+
+    parts = ModelParts(name="fake-model", runner=runner or FakeRunner(t0=0.002), tokenizer=tok,
+                       encode_chat=encode_chat, default_max_tokens=16,
+                       info={"model": "fake-model", "repo": "test/fake", "device": "cpu",
+                             "dtype": "fp32", "quant": "none"})
+    defaults = {"control_interval_s": 0.2, "max_context": 256}
+    return Service(settings=Settings(**{**defaults, **settings}), parts=parts,
+                   probe=probe or FakeProbe(limit=1 << 30, used=1 << 28),
+                   metrics=EngineMetrics(), model_names=["fake-model"])
