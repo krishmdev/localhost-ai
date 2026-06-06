@@ -70,6 +70,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = ["model: needs the pinned SmolLM2 weights in .models/ (run `make models` first)"]
 addopts = "-m 'not model'"
+filterwarnings = ["ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"]
 
 [tool.ruff]
 line-length = 100
