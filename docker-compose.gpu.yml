@@ -1,0 +1,20 @@
+# NVIDIA override (not tested on the Apple-silicon machine this repo was built on):
+#   docker compose -p lhai -f docker-compose.yml -f docker-compose.gpu.yml up --build -d
+services:
+  server:
+    build:
+      context: .
+      args:
+        TORCH_EXTRA: cu126
+        EXTRA_FLAGS: --extra cuda
+    image: localhost-ai:cu126
+    environment:
+      LHAI_DEVICE: cuda
+      LHAI_SLO_TPOT_MS: ${LHAI_SLO_TPOT_MS:-50}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
