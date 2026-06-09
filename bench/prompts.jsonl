@@ -1,0 +1,32 @@
+{"id": "p00", "prompt": "Name three planets."}
+{"id": "p01", "prompt": "Write a short poem about a lighthouse keeper who talks to the fog."}
+{"id": "p02", "prompt": "A small bakery sells 120 loaves a day at 4 dollars each. Flour, butter and yeast cost 1.30 per loaf, rent is 2400 a month, and two part-time staff cost 3000 a month together. The owner wants to know the monthly profit, the break-even number of loaves per day, and what happens if the price goes up by 50 cents while sales drop by ten percent. Walk through the math."}
+{"id": "p03", "prompt": "What color is the sky on Mars?"}
+{"id": "p04", "prompt": "Give three tips for writing a clear email to a busy manager."}
+{"id": "p05", "prompt": "Explain, step by step, how a web browser loads a page after you type a URL: DNS lookup, TCP and TLS handshakes, the HTTP request, parsing HTML, fetching CSS and JavaScript, building the render tree and painting. Keep each step to one or two sentences."}
+{"id": "p06", "prompt": "Define entropy in one line."}
+{"id": "p07", "prompt": "Write a two-paragraph story about a robot that learns to bake bread."}
+{"id": "p08", "prompt": "What does CPU stand for?"}
+{"id": "p09", "prompt": "Describe a good morning routine for a college student with early classes."}
+{"id": "p10", "prompt": "Spell 'necessary' backwards."}
+{"id": "p11", "prompt": "What should someone check before buying a used car?"}
+{"id": "p12", "prompt": "What is a haiku?"}
+{"id": "p13", "prompt": "Compare trains and planes for a 500 km trip in terms of time, cost and comfort."}
+{"id": "p14", "prompt": "What is the square root of 144?"}
+{"id": "p15", "prompt": "Give a beginner's plan for learning to run 5 km in eight weeks."}
+{"id": "p16", "prompt": "Name the largest ocean."}
+{"id": "p17", "prompt": "Explain what RAM is to someone who has never used a computer."}
+{"id": "p18", "prompt": "Give me a synonym for quick."}
+{"id": "p19", "prompt": "Summarize the water cycle in four sentences."}
+{"id": "p20", "prompt": "Say hello in Spanish."}
+{"id": "p21", "prompt": "Explain the difference between weather and climate with an example."}
+{"id": "p22", "prompt": "List two prime numbers above 50."}
+{"id": "p23", "prompt": "Explain why the sky looks blue during the day and red at sunset."}
+{"id": "p24", "prompt": "Is a tomato a fruit?"}
+{"id": "p25", "prompt": "Explain recursion using an everyday analogy, then give a tiny code example."}
+{"id": "p26", "prompt": "What is the boiling point of water in Fahrenheit?"}
+{"id": "p27", "prompt": "Explain what a hash function is and why collisions matter."}
+{"id": "p28", "prompt": "Convert 5 km to miles."}
+{"id": "p29", "prompt": "Explain how vaccines train the immune system."}
+{"id": "p30", "prompt": "What year did the first moon landing happen?"}
+{"id": "p31", "prompt": "Describe the plot of a mystery novel you would like to read."}
