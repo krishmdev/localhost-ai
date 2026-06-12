@@ -19,7 +19,7 @@ SEEDS = range(20)
 MEM_OK = MemSnapshot(used=100, limit=1000, headroom=900)
 
 
-def feed(ctl, now, tpot, n=25, batch=None, span=1.0):
+def feed(ctl, now, tpot, n=25, batch=None, span=1.2):
     b = ctl.limit if batch is None else batch
     for i in range(n):
         t = now - span + span * (i + 1) / n
@@ -46,6 +46,14 @@ def test_holds_without_enough_fresh_samples():
     feed(ctl, 1.0, 0.2, n=5)
     d = tick(ctl, 1.0)
     assert d.action == "hold" and ctl.limit == 20
+
+
+def test_holds_until_samples_cover_an_interval():
+    ctl = make()
+    feed(ctl, 1.0, 0.01, n=30, span=0.4)  # 30 samples, but only 0.4 s of evidence
+    assert tick(ctl, 1.0).action == "hold"
+    feed(ctl, 1.7, 0.01, n=30, span=0.6)
+    assert tick(ctl, 1.7).action == "increase"
 
 
 def test_slo_violation_decreases_by_20_percent():
@@ -93,9 +101,10 @@ def test_deadband_holds():
 
 def test_oom_halves_immediately_and_blocks_increases():
     ctl = make(initial=40)
-    ctl.report_oom(0.5)
-    d = tick(ctl, 0.6)  # no fresh samples at all: OOM is never gated
+    d = ctl.report_oom(0.5)  # applied at once, no fresh samples needed
     assert d.action == "oom_backoff" and d.shed and ctl.limit == 20
+    assert ctl.report_oom(0.9) is None and ctl.limit == 20  # same interval: one loss event
+    assert ctl.report_oom(1.6).limit == 10
     for now in (2.0, 3.0, 4.0):
         feed(ctl, now, 0.01)
         assert tick(ctl, now).action == "hold"
@@ -113,7 +122,7 @@ def test_memory_low_watermark_decreases_and_sheds():
 def test_clamped_to_kv_ceiling_and_bounds():
     ctl = make(min_batch=2, max_batch=24)
     d = tick(ctl, 0.5, ceiling=7)
-    assert ctl.limit == 7 and d.action == "clamp" and d.shed
+    assert ctl.limit == 7 and d.action == "clamp" and not d.shed  # clamps never preempt
     tick(ctl, 0.7, ceiling=0)
     assert ctl.limit == 2
     feed(ctl, 3.0, 0.001)

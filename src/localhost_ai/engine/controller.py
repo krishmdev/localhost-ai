@@ -4,15 +4,16 @@
 p95 time-per-output-token (TPOT) against an SLO, live memory headroom, and OOM events. The update
 rule, in priority order:
 
-1. OOM (never gated): L <- max(Lmin, L // 2), new epoch, 3 intervals of no increases.
+1. OOM (never gated, applied the moment it's reported, at most once per interval):
+   L <- max(Lmin, L // 2), new epoch, 3 intervals of no increases.
 2. Headroom below the low watermark (live reading): L <- max(Lmin, floor(0.8 L)), new epoch.
-3. Fewer than n_min fresh samples, or the epoch is younger than one interval: hold.
+3. Fewer than n_min fresh samples, or they cover less than one interval: hold.
 4. Fresh p95 > SLO: L <- max(Lmin, floor(0.8 L)), new epoch.
 5. Increase cooldown still running: hold.
 6. Fresh p95 < 0.9 SLO, headroom above the high watermark and the batch saturated
    (queue > 0 and running >= L): L <- L + max(1, L // 10), new epoch.
 7. Otherwise (p95 in the [0.9 SLO, SLO] deadband): hold.
-8. Clamp L to [Lmin, min(Lmax, KV ceiling)].
+8. Clamp L to [Lmin, min(Lmax, KV ceiling)]. A clamp only stops admissions; it never preempts.
 
 Fresh evidence: every TPOT sample is tagged with the epoch it was measured in, and only samples
 from the current epoch, measured while the running batch was within the current limit, count.
@@ -20,8 +21,13 @@ Any change of L starts a new epoch and clears the window. Without this, one slow
 5 s window keeps triggering decreases after the batch has already shrunk (the stale-window
 cascade), because each decrease would be judged on latency measured at the old, larger batch.
 
-AIMD does not settle on one value. Under steady load it saws between roughly 0.8 b* and b*
-(b* = the largest batch that meets the SLO)."""
+What it converges to depends on noise. With b* the largest batch whose latency meets the SLO:
+without noise L climbs until p95 enters the deadband and stays there (0.875 b* in the
+simulator's S1). When the p95 estimate is noisier than the 10% deadband, L saws between roughly
+0.8x and 1x of the noise-adjusted boundary (S3). It is never a point-convergence controller.
+The samples should be decode-step times only: prefill time scales with prompt length and
+admissions, not with batch size, and mixing it in drags L toward a value set by output length.
+"""
 
 from __future__ import annotations
 
@@ -98,7 +104,7 @@ class Controller(Protocol):
     @property
     def epoch(self) -> int: ...
     def observe(self, sample: Sample) -> None: ...
-    def report_oom(self, now: float) -> None: ...
+    def report_oom(self, now: float) -> Decision | None: ...
     def tick(self, obs: Observation) -> Decision: ...
     def state(self) -> dict: ...
 
@@ -151,8 +157,9 @@ class FixedController(_Decisions):
     def observe(self, sample: Sample) -> None:
         pass
 
-    def report_oom(self, now: float) -> None:
+    def report_oom(self, now: float) -> Decision | None:
         self._oom = True
+        return None
 
     def tick(self, obs: Observation) -> Decision:
         hr = obs.mem.headroom_frac if obs.mem else None
@@ -179,7 +186,7 @@ class AIMDController(_Decisions):
         self._epoch_started: float | None = None
         self._window: deque[Sample] = deque()
         self._cooldown = 0
-        self._oom_pending = False
+        self._last_oom_cut: float | None = None
         self._lock = threading.Lock()
 
     @property
@@ -199,15 +206,29 @@ class AIMDController(_Decisions):
             if sample.epoch == self._epoch:
                 self._window.append(sample)
 
-    def report_oom(self, now: float) -> None:
+    def report_oom(self, now: float) -> Decision | None:
+        """Halve L right away so the scheduler doesn't re-admit into the same OOM before the
+        next tick. Repeated OOMs within one interval don't halve again (one loss event)."""
         with self._lock:
-            self._oom_pending = True
+            c = self.cfg
+            if self._last_oom_cut is not None and now - self._last_oom_cut < c.interval_s:
+                return None
+            self._last_oom_cut = now
+            before = self._limit
+            evidence = self._epoch
+            self._limit = max(c.min_batch, before // 2)
+            self._cooldown = c.oom_cooldown
+            self._new_epoch(now)
+            d = Decision(now, "oom_backoff", "out-of-memory during a step", before, self._limit,
+                         self._epoch, evidence, None, 0, None, True)
+            self.log.append(d)
+            return d
 
-    def _fresh(self, now: float) -> list[float]:
+    def _fresh(self, now: float) -> list[Sample]:
         horizon = now - self.cfg.window_s
         while self._window and self._window[0].t < horizon:
             self._window.popleft()
-        return [s.tpot_s for s in self._window if s.batch <= self._limit]
+        return [s for s in self._window if s.batch <= self._limit]
 
     def _new_epoch(self, now: float) -> None:
         self._epoch += 1
@@ -231,25 +252,20 @@ class AIMDController(_Decisions):
             self._cooldown -= 1
 
         fresh = self._fresh(now)
-        p = p95(fresh) if fresh else None
-        age = now - self._epoch_started
+        p = p95([s.tpot_s for s in fresh]) if fresh else None
+        # time covered by the fresh samples: from the start of the first step to the end of the last
+        covered = fresh[-1].t - (fresh[0].t - fresh[0].tpot_s) if fresh else 0.0
         shed = False
         new = before
 
-        if self._oom_pending:
-            self._oom_pending = False
-            new = max(c.min_batch, before // 2)
-            self._cooldown = c.oom_cooldown
-            action, reason, shed = "oom_backoff", "out-of-memory during a step", True
-            self._new_epoch(now)
-        elif hr is not None and hr < c.mem_low_wm:
+        if hr is not None and hr < c.mem_low_wm:
             new = max(c.min_batch, math.floor(c.decrease * before))
             action = "mem_decrease"
             reason = f"headroom {hr:.1%} < low watermark {c.mem_low_wm:.0%}"
             shed = True
-        elif len(fresh) < c.n_min or age < c.interval_s:
+        elif len(fresh) < c.n_min or covered < c.interval_s:
             action = "hold"
-            reason = f"waiting for fresh samples ({len(fresh)}/{c.n_min}, epoch age {age:.1f}s)"
+            reason = f"waiting for fresh samples ({len(fresh)}/{c.n_min}, {covered:.2f}s covered)"
         elif p > c.slo_tpot_s:
             new = max(c.min_batch, math.floor(c.decrease * before))
             action = "slo_decrease"
@@ -275,10 +291,9 @@ class AIMDController(_Decisions):
         if clamped != new and action in ("hold", "increase"):
             action = "clamp"
             reason = f"limit clamped to KV/max ceiling {ceiling}"
-            shed = clamped < before
         new = clamped
 
-        if new != before and action != "oom_backoff":
+        if new != before:
             self._new_epoch(now)
         self._limit = new
         d = Decision(now, action, reason, before, new, self._epoch, evidence_epoch,

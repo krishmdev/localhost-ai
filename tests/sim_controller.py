@@ -5,7 +5,8 @@ Model, per control interval of 1 s:
 - Decode-step latency is t0 + k * b for a running batch of b rows, times (1 + N(0, sigma)).
   Steps are simulated back to back until the interval is used up; each one is a TPOT sample
   tagged with the controller epoch at the moment it was measured.
-- Samples reach the controller one interval late (measurement delay).
+- Samples reach the controller one interval late (measurement delay). The step in flight at a
+  tick finishes after it, so time is continuous across intervals.
 - When L rises, queued requests are admitted at once. When L falls, rows finish naturally
   (`drain` of the running rows per interval) unless the decision says to shed, in which case
   the newest rows are preempted immediately, as the real scheduler does.
@@ -79,6 +80,7 @@ def run(sc: Scenario) -> Trace:
     running = min(ctl.limit, sc.demand)
     external = 0.0
     k = sc.k
+    t_cursor = 0.0
 
     for i in range(sc.intervals):
         now = float(i)
@@ -94,8 +96,7 @@ def run(sc: Scenario) -> Trace:
         for s in ready:
             ctl.observe(s)
 
-        if sc.oom_at is not None and i == sc.oom_at:
-            ctl.report_oom(now)
+        oom = ctl.report_oom(now) if sc.oom_at is not None and i == sc.oom_at else None
 
         used = sc.base_mem + external + running * sc.per_row_mem
         mem = MemSnapshot(used=int(used * MEM_UNIT), limit=MEM_UNIT,
@@ -104,26 +105,27 @@ def run(sc: Scenario) -> Trace:
                            int(sc.per_row_mem * MEM_UNIT), 1)
         d = ctl.tick(Observation(now=now, running=running, queued=sc.demand - running,
                                  mem=mem, kv_ceiling=ceil_))
+        if oom is not None:
+            tr.decisions.append(oom)
         tr.decisions.append(d)
 
         L = ctl.limit
         if L >= running:
             running = min(L, sc.demand)
-        elif d.shed:
+        elif d.shed or oom is not None:
             running = L
         else:
             running = max(L, running - math.ceil(sc.drain * running))
 
-        # simulate this interval's decode steps under the new state
-        t = now
+        # decode steps run back to back; the one in flight at a tick finishes after it
+        t = max(t_cursor, now)
         lat_this = []
-        while True:
+        while t < now + 1.0:
             lat = (sc.t0 + k * running) * max(0.05, 1.0 + rng.gauss(0.0, sc.sigma))
-            if t + lat > now + 1.0:
-                break
             t += lat
             lat_this.append(lat)
             pending.append(Sample(t=t, tpot_s=lat, epoch=ctl.epoch, batch=running))
+        t_cursor = t
 
         used = sc.base_mem + external + running * sc.per_row_mem
         tr.limit.append(L)
