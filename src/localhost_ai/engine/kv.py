@@ -13,7 +13,18 @@ from transformers import DynamicCache
 
 
 def build(layers: list[tuple[torch.Tensor, torch.Tensor]]) -> DynamicCache:
-    return DynamicCache(ddp_cache_data=layers)
+    """Wrap existing tensors in a DynamicCache without copying them. (Passing tensors through
+    `ddp_cache_data` goes through `update`, which concatenates onto an empty tensor: a copy.)"""
+    cache = DynamicCache(ddp_cache_data=[(None, None)] * len(layers))
+    for layer, (k, v) in zip(cache.layers, layers, strict=True):
+        _set(layer, k, v)
+    return cache
+
+
+def _set(layer, k: torch.Tensor, v: torch.Tensor) -> None:
+    if not layer.is_initialized:
+        layer.lazy_initialization(k, v)
+    layer.keys, layer.values = k, v
 
 
 def layers(cache: DynamicCache) -> list[tuple[torch.Tensor, torch.Tensor]]:
@@ -36,22 +47,33 @@ def _left_pad(t: torch.Tensor, n: int) -> torch.Tensor:
 
 def merge(cache_a: DynamicCache, mask_a: torch.Tensor,
           cache_b: DynamicCache, mask_b: torch.Tensor) -> tuple[DynamicCache, torch.Tensor]:
+    """Append b's rows to a, in place, one layer at a time. Each old layer tensor is released
+    as soon as its merged replacement exists, so the peak is about the merged size plus one
+    layer rather than a + b + merged. Both caches are consumed; if this raises (OOM), they are
+    left half-merged and the caller must drop them."""
     ta, tb = mask_a.shape[1], mask_b.shape[1]
     t = max(ta, tb)
-    merged = []
-    for (ka, va), (kb, vb) in zip(layers(cache_a), layers(cache_b), strict=True):
-        k = torch.cat([_left_pad(ka, t - ta), _left_pad(kb, t - tb)], dim=0)
-        v = torch.cat([_left_pad(va, t - ta), _left_pad(vb, t - tb)], dim=0)
-        merged.append((k, v))
+    for la, lb in zip(cache_a.layers, cache_b.layers, strict=True):
+        k = torch.cat([_left_pad(la.keys, t - ta), _left_pad(lb.keys, t - tb)], dim=0)
+        v = torch.cat([_left_pad(la.values, t - ta), _left_pad(lb.values, t - tb)], dim=0)
+        _set(la, k, v)
+        lb.keys = lb.values = None
     mask = torch.cat([F.pad(mask_a, (t - ta, 0)), F.pad(mask_b, (t - tb, 0))], dim=0)
-    return build(merged), mask
+    return cache_a, mask
 
 
 def select_rows(cache: DynamicCache, mask: torch.Tensor,
                 keep: list[int]) -> tuple[DynamicCache, torch.Tensor]:
+    """Keep only `keep` rows, in place and layer by layer (same peak argument as merge)."""
     idx = torch.tensor(keep, dtype=torch.long, device=mask.device)
-    kept = [(k.index_select(0, idx), v.index_select(0, idx)) for k, v in layers(cache)]
-    return trim_left(build(kept), mask.index_select(0, idx))
+    mask = mask.index_select(0, idx)
+    real_cols = mask.sum(dim=0).nonzero()
+    drop = int(real_cols[0]) if real_cols.numel() else mask.shape[1]
+    for layer in cache.layers:
+        k = layer.keys.index_select(0, idx)[:, :, drop:]
+        v = layer.values.index_select(0, idx)[:, :, drop:]
+        _set(layer, k, v)
+    return cache, mask[:, drop:]
 
 
 def trim_left(cache: DynamicCache, mask: torch.Tensor) -> tuple[DynamicCache, torch.Tensor]:
