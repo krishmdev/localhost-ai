@@ -8,8 +8,10 @@ One `step()` is one scheduler iteration:
 4. merge them into the running batch (left-pad + concat) and run one decode step for every row;
 5. filter out rows that finished.
 
-The wall time of an iteration is the inter-token latency (TPOT) every row that was already
-running experienced, so that's the sample fed to the controller.
+The controller is fed decode-step time only, measured with the batch size at decode time.
+Prefill time depends on prompt lengths and how many requests arrived, not on batch size, and
+mixing it in drags L toward a value set by output length rather than by capacity. Users do see
+prefill stalls in their inter-token latency; `max_prefill_tokens_per_step` bounds them.
 
 On an out-of-memory error the newest row is preempted by recompute (vLLM style): its KV is
 dropped, it goes back to the front of the queue, and when it's admitted again the prompt plus
@@ -26,7 +28,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..memory import MemoryProbe, MemSnapshot
-from .controller import Controller, Decision, Observation, Sample, kv_ceiling
+from .controller import Controller, Decision, Observation, Sample, kv_ceiling, percentile
 from .detok import Decoder, IncrementalDetokenizer
 from .request import DoneEvent, ErrorEvent, FinishReason, Request, TokenEvent
 from .runner import ModelRunner, is_oom
@@ -41,7 +43,8 @@ class QueueFull(Exception):
 
 
 class NullMetrics:
-    def step(self, duration_s: float, batch: int, prefill_tokens: int) -> None: ...
+    def step(self, iter_s: float, prefill_s: float, decode_s: float, batch: int,
+             prefill_tokens: int) -> None: ...
     def token(self, n: int) -> None: ...
     def finished(self, req: Request, done: DoneEvent) -> None: ...
     def decision(self, d: Decision) -> None: ...
@@ -84,7 +87,12 @@ class Scheduler:
         self.busy_s = 0.0
         self.busy_ratio = 0.0
         self._busy_at_tick = 0.0
-        self.steps: deque[tuple[float, float, int]] = deque()  # (t, tpot_s, batch)
+        self.steps: deque[tuple[float, float, int]] = deque()  # (t, decode_s, batch)
+        self.iters: deque[tuple[float, float]] = deque()  # (t, iteration_s)
+        self._kv_at_tick = 0
+        # After an OOM, don't admit anything new until a running row finishes; otherwise the
+        # preempted row goes straight back in and hits the same OOM (thrash).
+        self._hold_admission = False
         self.ttfts: deque[tuple[float, float]] = deque()
         self.tokens: deque[tuple[float, int]] = deque()
         self.kv_ceiling: int | None = None
@@ -125,18 +133,24 @@ class Scheduler:
             return False
 
         t_start = self.clock()
-        had_rows = len(self.running)
         prefill_tokens = self._admit_and_prefill()
+        t_mid = self.clock()
+        decode_s = 0.0
+        batch = len(self.running)
         if self.running:
-            self._decode()
+            epoch = self.controller.epoch
+            ok = self._decode()
+            t_end = self.clock()
+            decode_s = t_end - t_mid
+            if ok:
+                self.controller.observe(Sample(t=t_end, tpot_s=decode_s, epoch=epoch,
+                                               batch=batch))
+                self.steps.append((t_end, decode_s, batch))
         t_end = self.clock()
         dur = t_end - t_start
         self.busy_s += dur
-        if had_rows:
-            self.controller.observe(Sample(t=t_end, tpot_s=dur, epoch=self.controller.epoch,
-                                           batch=had_rows))
-            self.steps.append((t_end, dur, had_rows))
-        self.metrics.step(dur, len(self.running), prefill_tokens)
+        self.iters.append((t_end, dur))
+        self.metrics.step(dur, t_mid - t_start, decode_s, batch, prefill_tokens)
         return True
 
     def tick(self, now: float) -> Decision:
@@ -148,6 +162,7 @@ class Scheduler:
         if self.probe is not None:
             self.mem = self.probe.snapshot()
         kv_in_use = self.kv_tokens * self.runner.kv_bytes_per_token
+        self._kv_at_tick = kv_in_use
         self.kv_ceiling = None
         if self.mem is not None:
             self.kv_ceiling = kv_ceiling(self.mem, self.cfg.mem_reserve, kv_in_use,
@@ -158,6 +173,7 @@ class Scheduler:
         self.last_decision = d
         if d.shed and len(self.running) > self.controller.limit:
             self._preempt(len(self.running) - self.controller.limit)
+            self._release()
         self._stats = self._compute_stats()
         self.metrics.decision(d)
         self.metrics.gauges(self)
@@ -176,7 +192,7 @@ class Scheduler:
 
     def _trim_stats(self, now: float) -> None:
         horizon = now - self.cfg.stats_window_s
-        for dq in (self.steps, self.ttfts, self.tokens):
+        for dq in (self.steps, self.iters, self.ttfts, self.tokens):
             while dq and dq[0][0] < horizon:
                 dq.popleft()
 
@@ -194,23 +210,30 @@ class Scheduler:
             self._keep([i for i, r in enumerate(self.running) if not r.cancelled])
 
     def _kv_budget_tokens(self) -> int | None:
+        """KV tokens the batch may hold, from the reading taken at the last tick: that tick's
+        headroom minus the reserve, plus the KV that was already held then."""
         if self.mem is None:
             return None
-        kv_in_use = self.kv_tokens * self.runner.kv_bytes_per_token
-        budget = self.mem.headroom - self.cfg.mem_reserve * self.mem.limit + kv_in_use
+        budget = self.mem.headroom - self.cfg.mem_reserve * self.mem.limit + self._kv_at_tick
         return int(budget // self.runner.kv_bytes_per_token)
 
     def _admit(self) -> list[Request]:
+        if self._hold_admission:
+            if self.running:
+                return []
+            self._hold_admission = False
         limit = self.controller.limit
         budget = self._kv_budget_tokens()
         cur_len = self.kv_tokens // len(self.running) if self.running else 0
         admitted: list[Request] = []
-        prefill = 0
+        longest = 0
         with self._lock:
             while self.waiting and len(self.running) + len(admitted) < limit:
                 req = self.waiting[0]
                 n = len(req.all_ids)
-                if admitted and prefill + n > self.cfg.max_prefill_tokens_per_step:
+                # the prefill batch is left-padded, so its cost is rows x longest prompt
+                padded = (len(admitted) + 1) * max(longest, n)
+                if admitted and padded > self.cfg.max_prefill_tokens_per_step:
                     break
                 if budget is not None:
                     rows = len(self.running) + len(admitted) + 1
@@ -219,7 +242,7 @@ class Scheduler:
                         break
                 self.waiting.popleft()
                 admitted.append(req)
-                prefill += n
+                longest = max(longest, n)
                 cur_len = max(cur_len, n)
         return admitted
 
@@ -246,20 +269,28 @@ class Scheduler:
             if not self.running and len(new) == 1:
                 self._fail(new[0], "out of memory during prefill of a single request")
             else:
-                with self._lock:
-                    self.waiting.extendleft(reversed(new))
+                self._requeue(new)
             return 0
+        padded = len(new) * max(len(r.all_ids) for r in new)
         tokens = sample(logits, [r.params for r in new], [r.generator for r in new])
         keep = [i for i, (r, t) in enumerate(zip(new, tokens, strict=True)) if self._accept(r, t)]
-        if len(keep) < len(new):
-            state = self.runner.select(state, keep) if keep else None
-            new = [new[i] for i in keep]
-        if new:
-            self.state = state if self.state is None else self.runner.merge(self.state, state)
-            self.running.extend(new)
-        return sum(len(r.all_ids) for r in new)
+        try:
+            if len(keep) < len(new):
+                state = self.runner.select(state, keep) if keep else None
+                new = [new[i] for i in keep]
+            if new:
+                self.state = state if self.state is None else self.runner.merge(self.state, state)
+                self.running.extend(new)
+        except Exception as exc:
+            if not is_oom(exc):
+                raise
+            # merge consumes both caches, so the whole batch is recomputed
+            self._on_oom()
+            self._reset_batch([*self.running, *new])
+        return padded
 
-    def _decode(self) -> None:
+    def _decode(self) -> bool:
+        """One decode step for every running row. False if it didn't produce tokens."""
         last = [r.generated[-1] for r in self.running]
         try:
             logits = self.runner.decode(self.state, last)
@@ -268,43 +299,89 @@ class Scheduler:
                 for r in list(self.running):
                     self._fail(r, f"decode failed: {exc}")
                 self.running, self.state = [], None
-                return
+                return False
             self._on_oom()
             if len(self.running) == 1:
                 self._fail(self.running[0], "out of memory with a single running request")
                 self.running, self.state = [], None
             else:
                 self._preempt(1)
-            return
+            self._release()
+            return False
         tokens = sample(logits, [r.params for r in self.running],
                         [r.generator for r in self.running])
         keep = [i for i, (r, t) in enumerate(zip(self.running, tokens, strict=True))
                 if self._accept(r, t)]
         if len(keep) < len(self.running):
             self._keep(keep)
+        return True
 
     def _keep(self, keep: list[int]) -> None:
+        if len(keep) < len(self.running):
+            self._hold_admission = False  # a row left, so there's room again
         if not keep:
             self.running, self.state = [], None
             return
-        self.state = self.runner.select(self.state, keep)
+        try:
+            self.state = self.runner.select(self.state, keep)
+        except Exception as exc:
+            if not is_oom(exc):
+                raise
+            self._on_oom()
+            self._reset_batch([self.running[i] for i in keep])
+            return
         self.running = [self.running[i] for i in keep]
+
+    def _requeue(self, reqs: list[Request]) -> None:
+        with self._lock:
+            self.waiting.extendleft(reversed(reqs))
+
+    def _reset_batch(self, reqs: list[Request]) -> None:
+        """Drop the whole running batch's KV and requeue its rows for recompute."""
+        self.state = None
+        self.running = []
+        alive = [r for r in reqs if r.finish_reason is None]
+        for r in alive:
+            r.preemptions += 1
+            self.preemptions += 1
+            self.metrics.preempted()
+        self._requeue(alive)
+        self._release()
+
+    def _release(self) -> None:
+        release = getattr(self.runner, "release", None)
+        if release is not None:
+            release()
 
     def _preempt(self, n: int) -> None:
         n = min(n, len(self.running))
         victims = self.running[len(self.running) - n:]
-        self._keep(list(range(len(self.running) - n)))
+        keep = list(range(len(self.running) - n))
+        if not keep:
+            self.running, self.state = [], None
+        else:
+            try:
+                self.state = self.runner.select(self.state, keep)
+                self.running = [self.running[i] for i in keep]
+            except Exception as exc:
+                if not is_oom(exc):
+                    raise
+                self._reset_batch(list(self.running))
+                return
         for r in victims:
             r.preemptions += 1
             self.preemptions += 1
             self.metrics.preempted()
-        with self._lock:
-            self.waiting.extendleft(reversed(victims))
+        self._requeue(victims)
 
     def _on_oom(self) -> None:
         self.ooms += 1
         self.metrics.oom()
-        self.controller.report_oom(self.clock())
+        self._hold_admission = True
+        d = self.controller.report_oom(self.clock())
+        if d is not None:
+            self.last_decision = d
+            self.metrics.decision(d)
 
     def _accept(self, r: Request, token: int) -> bool:
         """Record one generated token. Returns False if the request is finished."""
@@ -380,12 +457,19 @@ class Scheduler:
                 "batch_limit": self.controller.limit}
 
     def _compute_stats(self) -> dict:
-        tpots = sorted(s[1] for s in self.steps)
-        ttfts = sorted(s[1] for s in self.ttfts)
+        """Latency names used everywhere (telemetry, metrics, docs):
+        decode_step_*: wall time of decode steps in the last 5 s (what the controller measures);
+        controller_p95_ms: p95 over the fresh samples behind the last controller decision;
+        iteration_p95_ms: whole scheduler iterations, prefill included (what streams feel);
+        per-request TPOT lives in the request's own timings and the lhai_tpot_seconds histogram."""
+        decode = [s[1] for s in self.steps]
+        iters = [s[1] for s in self.iters]
+        ttfts = [s[1] for s in self.ttfts]
 
-        def pct(xs: list[float], q: float) -> float | None:
-            return xs[min(len(xs) - 1, int(q * len(xs)))] * 1e3 if xs else None
+        def ms(xs: list[float], q: float) -> float | None:
+            return round(percentile(xs, q) * 1e3, 3) if xs else None
 
+        d = self.last_decision
         span = self.cfg.stats_window_s
         return {
             "running": len(self.running),
@@ -393,9 +477,11 @@ class Scheduler:
             "batch_limit": self.controller.limit,
             "kv_tokens": self.kv_tokens,
             "kv_ceiling": self.kv_ceiling,
-            "tpot_p50_ms": pct(tpots, 0.5),
-            "tpot_p95_ms": pct(tpots, 0.95),
-            "ttft_p95_ms": pct(ttfts, 0.95),
+            "decode_step_p50_ms": ms(decode, 0.5),
+            "decode_step_p95_ms": ms(decode, 0.95),
+            "controller_p95_ms": None if d is None or d.p95_ms is None else round(d.p95_ms, 3),
+            "iteration_p95_ms": ms(iters, 0.95),
+            "ttft_p95_ms": ms(ttfts, 0.95),
             "tokens_per_s": sum(n for _, n in self.tokens) / span,
             "busy_ratio": self.busy_ratio,
             "preemptions": self.preemptions,

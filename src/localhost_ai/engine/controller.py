@@ -109,13 +109,17 @@ class Controller(Protocol):
     def state(self) -> dict: ...
 
 
-def p95(values: list[float]) -> float:
-    """95th percentile with linear interpolation (NumPy's default method)."""
+def percentile(values: list[float], q: float) -> float:
+    """Linear interpolation between closest ranks (NumPy's default method)."""
     s = sorted(values)
-    pos = 0.95 * (len(s) - 1)
+    pos = q * (len(s) - 1)
     lo = math.floor(pos)
     hi = min(lo + 1, len(s) - 1)
     return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+
+
+def p95(values: list[float]) -> float:
+    return percentile(values, 0.95)
 
 
 def kv_ceiling(mem: MemSnapshot, reserve: float, kv_in_use: int, bytes_per_token: int,
