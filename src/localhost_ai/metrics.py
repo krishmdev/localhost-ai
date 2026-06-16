@@ -27,13 +27,20 @@ class EngineMetrics:
                               buckets=TTFT_BUCKETS)
         self.tpot = Histogram(p + "tpot_seconds", "Mean time per output token, per request",
                               registry=r, buckets=LATENCY_BUCKETS)
-        self.step_s = Histogram(p + "step_seconds", "Wall time of one scheduler iteration",
+        self.step_s = Histogram(p + "step_seconds",
+                                "Wall time of one scheduler iteration (prefill + decode)",
                                 registry=r, buckets=LATENCY_BUCKETS)
+        self.decode_s = Histogram(p + "decode_step_seconds",
+                                  "Wall time of one decode step (the controller's signal)",
+                                  registry=r, buckets=LATENCY_BUCKETS)
+        self.prefill_s = Histogram(p + "prefill_seconds", "Wall time of one batched prefill",
+                                   registry=r, buckets=LATENCY_BUCKETS)
         self.e2e = Histogram(p + "e2e_latency_seconds", "Request latency, arrival to done",
                              registry=r, buckets=E2E_BUCKETS)
         self.batch = Histogram(p + "batch_size", "Running rows per iteration", registry=r,
                                buckets=BATCH_BUCKETS)
-        self.prompt_tokens = Counter(p + "prompt_tokens", "Prompt tokens processed", registry=r)
+        self.prompt_tokens = Counter(p + "prompt_tokens",
+                                     "Prefilled tokens, padding included", registry=r)
         self.gen_tokens = Counter(p + "generated_tokens", "Tokens generated", registry=r)
         self.requests = Counter(p + "requests", "Finished requests", ["status"], registry=r)
         self.decisions = Counter(p + "controller_decisions", "Controller decisions", ["action"],
@@ -44,7 +51,11 @@ class EngineMetrics:
         self.running = Gauge(p + "running_requests", "Rows in the running batch", registry=r)
         self.limit = Gauge(p + "batch_limit", "Controller batch limit L", registry=r)
         self.slo = Gauge(p + "slo_tpot_seconds", "TPOT SLO the controller targets", registry=r)
-        self.p95 = Gauge(p + "tpot_p95_seconds", "p95 step latency over the last 5 s", registry=r)
+        self.p95 = Gauge(p + "decode_step_p95_seconds", "p95 decode-step time over the last 5 s",
+                         registry=r)
+        self.ctl_p95 = Gauge(p + "controller_p95_seconds",
+                             "p95 of the fresh samples behind the last controller decision",
+                             registry=r)
         self.mem_used = Gauge(p + "device_memory_used_bytes", "Device memory in use", registry=r)
         self.mem_limit = Gauge(p + "device_memory_limit_bytes", "Device memory limit",
                                registry=r)
@@ -65,8 +76,13 @@ class EngineMetrics:
             self.requests.labels(status)
 
     # scheduler hooks (compute thread)
-    def step(self, duration_s: float, batch: int, prefill_tokens: int) -> None:
-        self.step_s.observe(duration_s)
+    def step(self, iter_s: float, prefill_s: float, decode_s: float, batch: int,
+             prefill_tokens: int) -> None:
+        self.step_s.observe(iter_s)
+        if decode_s:
+            self.decode_s.observe(decode_s)
+        if prefill_tokens:
+            self.prefill_s.observe(prefill_s)
         if batch:
             self.batch.observe(batch)
         if prefill_tokens:
@@ -102,8 +118,10 @@ class EngineMetrics:
         self.limit.set(st["batch_limit"])
         self.kv_tokens.set(st["kv_tokens"])
         self.busy.set(st["busy_ratio"])
-        if st["tpot_p95_ms"] is not None:
-            self.p95.set(st["tpot_p95_ms"] / 1e3)
+        if st["decode_step_p95_ms"] is not None:
+            self.p95.set(st["decode_step_p95_ms"] / 1e3)
+        if st["controller_p95_ms"] is not None:
+            self.ctl_p95.set(st["controller_p95_ms"] / 1e3)
         if st["kv_ceiling"] is not None:
             self.kv_ceiling.set(st["kv_ceiling"])
         slo = getattr(getattr(s.controller, "cfg", None), "slo_tpot_s", None)

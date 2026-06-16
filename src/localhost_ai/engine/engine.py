@@ -95,8 +95,13 @@ class AsyncEngine:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
 
+        req: Request
+
         def push(ev: Event) -> None:
-            loop.call_soon_threadsafe(queue.put_nowait, ev)
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait, ev)
+            except RuntimeError:  # the event loop is gone; nobody is listening
+                req.cancel()
 
         req = Request(prompt_ids=list(prompt_ids), params=params, on_event=push)
         pos = self.scheduler.add(req)  # raises QueueFull

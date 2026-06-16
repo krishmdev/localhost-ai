@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -98,19 +99,30 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    async def watch_disconnect() -> None:
+        while not await request.is_disconnected():
+            await asyncio.sleep(0.5)
+        handle.cancel()
+
+    watcher = asyncio.create_task(watch_disconnect())
     parts: list[str] = []
-    async for ev in handle.events():
-        if isinstance(ev, TokenEvent):
-            parts.append(ev.text)
-        elif isinstance(ev, ErrorEvent):
-            return error(500, ev.message, "server_error", ev.code)
-        elif isinstance(ev, DoneEvent):
-            return ChatCompletion(
-                id=cid, created=created, model=svc.model_name,
-                choices=[Choice(message=AssistantMessage(content="".join(parts)),
-                                finish_reason=ev.finish_reason)],
-                usage=usage(ev), timings=timings(ev),
-            )
+    try:
+        async for ev in handle.events():
+            if isinstance(ev, TokenEvent):
+                parts.append(ev.text)
+            elif isinstance(ev, ErrorEvent):
+                return error(500, ev.message, "server_error", ev.code)
+            elif isinstance(ev, DoneEvent):
+                return ChatCompletion(
+                    id=cid, created=created, model=svc.model_name,
+                    choices=[Choice(message=AssistantMessage(content="".join(parts)),
+                                    finish_reason=ev.finish_reason)],
+                    usage=usage(ev), timings=timings(ev),
+                )
+    finally:
+        watcher.cancel()
+        if handle.request.finish_reason is None:
+            handle.cancel()
     return error(500, "generation ended without a result", "server_error")
 
 
