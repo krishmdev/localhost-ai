@@ -36,6 +36,9 @@ def _snap(used: int, limit: int, source: str, util: float | None = None,
 
 
 class CudaProbe:
+    """Free memory from the driver plus what PyTorch's caching allocator holds but isn't using
+    (reserved - allocated): that part is reusable by us without asking the driver."""
+
     name = "cuda"
 
     def __init__(self, index: int = 0) -> None:
@@ -54,16 +57,21 @@ class CudaProbe:
             self._nvml = None
 
     def snapshot(self) -> MemSnapshot:
-        free, total = self._torch.cuda.mem_get_info(self._index)
+        cuda = self._torch.cuda
+        free, total = cuda.mem_get_info(self._index)
+        cached = cuda.memory_reserved(self._index) - cuda.memory_allocated(self._index)
+        headroom = free + max(0, cached)
         util = None
         if self._nvml is not None:
             util = float(self._nvml.nvmlDeviceGetUtilizationRates(self._handle).gpu)
-        return _snap(total - free, total, "cuda.mem_get_info", util)
+        return _snap(total - headroom, total, "cuda.mem_get_info", util, headroom=headroom)
 
 
 class MpsProbe:
-    """Apple silicon. The Metal limit is `recommended_max_memory`, but memory is unified with the
-    CPU, so headroom is also capped by what the OS says is available."""
+    """Apple silicon. Memory is unified with the CPU, so the usable limit is the smaller of
+    Metal's `recommended_max_memory` and what we hold plus what the OS could still give us.
+    `used` is live tensor memory (`current_allocated_memory`); the driver figure is a high-water
+    mark that includes cached blocks we can reuse, so that difference counts as ours too."""
 
     name = "mps"
 
@@ -73,10 +81,11 @@ class MpsProbe:
         self._mps = torch.mps
 
     def snapshot(self) -> MemSnapshot:
-        limit = int(self._mps.recommended_max_memory())
-        used = int(self._mps.driver_allocated_memory())
-        headroom = min(limit - used, psutil.virtual_memory().available)
-        return _snap(used, limit, "mps.recommended_max_memory", headroom=headroom)
+        used = int(self._mps.current_allocated_memory())
+        cached = max(0, int(self._mps.driver_allocated_memory()) - used)
+        available = psutil.virtual_memory().available
+        limit = min(int(self._mps.recommended_max_memory()), used + available + cached)
+        return _snap(used, limit, "mps(min(recommended_max, used+os_available))")
 
 
 class CpuProbe:

@@ -107,3 +107,11 @@ class HFModelRunner:
 
     def padded_tokens(self, state: HFBatch) -> int:
         return int(state.mask.numel())
+
+    def release(self) -> None:
+        """Hand cached allocator blocks back after shedding rows, so the memory probe (and the
+        OS) see the drop."""
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device.type == "mps":
+            torch.mps.empty_cache()
