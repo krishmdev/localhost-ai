@@ -66,10 +66,7 @@ def test_batched_matches_sequential(loaded):
     alone = [run(loaded, [p], limit=1)[0] for p in PROMPTS]
     batched = run(loaded, PROMPTS, limit=len(PROMPTS), join_after=2)
     for p, a, b in zip(PROMPTS, alone, batched, strict=True):
-        i = first_mismatch(a, b)
-        # fp32 reductions over different padded shapes can flip a near-tie late in a sequence;
-        # the first 16 tokens must match exactly.
-        assert i is None or i >= 16, f"{p!r}: diverged at token {i}"
+        assert a == b, f"{p!r}: diverged at token {first_mismatch(a, b)}"
 
 
 def test_logits_match_after_merge(loaded):
@@ -89,3 +86,47 @@ def test_logits_match_after_merge(loaded):
     kept = r.select(merged, [0, 2])
     nxt = r.decode(kept, step[[0, 2]].argmax(-1).tolist())
     assert nxt.shape[0] == 2
+
+
+def test_preempted_request_matches_uninterrupted(loaded):
+    """Recompute preemption: drop a row's KV mid-generation, re-prefill prompt + generated
+    tokens later, and the greedy continuation must be unchanged."""
+    alone = run(loaded, PROMPTS[:3], limit=3)
+    sched = Scheduler(loaded.runner, loaded.tokenizer, FixedController(3))
+    params = SamplingParams(temperature=0.0, max_tokens=N_TOKENS)
+    reqs = [Request(loaded.encode_chat([{"role": "user", "content": p}]), params)
+            for p in PROMPTS[:3]]
+    for r in reqs:
+        sched.add(r)
+    for _ in range(8):
+        sched.step()
+    sched._preempt(2)
+    assert sum(r.preemptions for r in reqs) == 2
+    while sched.has_work():
+        sched.step()
+    assert [r.generated for r in reqs] == alone
+
+
+def test_crop_after_failure_mid_stack(loaded):
+    """An error raised inside layer 17 leaves layers 0-16 with one extra position. The runner
+    crops them back, and the next decode matches a clean run."""
+    r = loaded.runner
+    ids = [loaded.encode_chat([{"role": "user", "content": p}]) for p in PROMPTS[:2]]
+    state, logits = r.prefill(ids)
+    toks = logits.argmax(-1).tolist()
+    clean_state, _ = r.prefill(ids)
+    expected = r.decode(clean_state, toks)
+
+    layer = loaded.runner.model.model.layers[17]
+
+    def boom(*_a, **_k):
+        raise torch.OutOfMemoryError("injected")
+
+    h = layer.register_forward_pre_hook(boom)
+    with pytest.raises(torch.OutOfMemoryError):
+        r.decode(state, toks)
+    h.remove()
+    lengths = {layer_.keys.shape[2] for layer_ in state.cache.layers}
+    assert lengths == {state.mask.shape[1]}
+    got = r.decode(state, toks)
+    torch.testing.assert_close(got, expected, atol=1e-4, rtol=1e-4)

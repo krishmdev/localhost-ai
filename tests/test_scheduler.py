@@ -1,5 +1,7 @@
+import math
+
 import pytest
-from fakes import EOS, FakeRunner, FakeTokenizer, reference
+from fakes import EOS, FakeRunner, FakeTokenizer, VirtualClock, reference
 
 from localhost_ai.engine.controller import AIMDConfig, AIMDController, FixedController
 from localhost_ai.engine.request import DoneEvent, ErrorEvent, Request, SamplingParams, TokenEvent
@@ -231,3 +233,63 @@ def test_stats_snapshot():
     st = s.stats()
     assert st["batch_limit"] == 4 and st["running"] == 0
     assert st["tokens_per_s"] > 0
+
+
+def test_merge_oom_recomputes_whole_batch():
+    runner = FakeRunner(merge_ooms=1)
+    s = make(limit=8, runner=runner, controller=AIMDController(AIMDConfig(initial=8)))
+    rs = [req(p) for p in PROMPTS]
+    s.add(rs[0])
+    s.step()
+    for r in rs[1:]:
+        s.add(r)
+    drain(s)
+    assert s.ooms == 1
+    for p, r in zip(PROMPTS, rs, strict=True):
+        assert r.generated == reference(p, 12)
+
+
+@pytest.mark.parametrize("controller", ["fixed", "aimd"])
+def test_oom_does_not_thrash(controller):
+    runner = FakeRunner(oom_above_tokens=60)
+    ctl = FixedController(4) if controller == "fixed" else AIMDController(AIMDConfig(initial=4))
+    s = make(runner=runner, controller=ctl)
+    prompts = [[1, 2, 3, 4, 5], [6, 7, 8], [9, 10, 11, 12], [13, 14]] * 2
+    rs = [req(p, SamplingParams(temperature=0.0, max_tokens=14)) for p in prompts]
+    for r in rs:
+        s.add(r)
+    steps = drain(s)
+    assert s.ooms <= 4, f"{s.ooms} OOMs in {steps} steps"
+    for p, r in zip(prompts, rs, strict=True):
+        assert r.generated == reference(p, 14)
+
+
+def test_prefill_time_does_not_drag_the_limit():
+    # Closed loop, short outputs, frequent admissions: every iteration with a join pays a
+    # prefill (~0.4 ms/token, a 300-token prompt ~ 125 ms). The controller only sees decode
+    # steps, so L must still sit in the S1 band around b* = (SLO - t0) / k = 32.
+    clock = VirtualClock()
+    runner = FakeRunner(clock=clock, t0=0.018, k=0.001, prefill_s=0.005,
+                        prefill_per_token=0.0004)
+    ctl = AIMDController(AIMDConfig(slo_tpot_s=0.050, initial=16, max_batch=128))
+    s = Scheduler(runner, FakeTokenizer(), ctl, cfg=SchedulerConfig(max_queue=512), clock=clock)
+    params = SamplingParams(temperature=0.0, max_tokens=64)
+    prompt = [i % 38 for i in range(300)]
+    demand = 80
+    live = []
+    limits = []
+    last_tick = -1.0
+    while clock.t < 150:
+        live = [r for r in live if r.finish_reason is None]
+        while len(live) < demand:
+            r = Request(prompt_ids=prompt, params=params)
+            s.add(r)
+            live.append(r)
+        s.step()
+        clock.t += 1e-4  # scheduler overhead, keeps the clock moving
+        if s._last_tick != last_tick:
+            last_tick = s._last_tick
+            limits.append((clock.t, ctl.limit))
+    after = [L for t, L in limits if t > 30]
+    lo, hi = math.floor(0.8 * 32) - 1, 32 + math.ceil(32 / 10) + 1
+    assert after and all(lo <= L <= hi for L in after), (min(after), max(after))

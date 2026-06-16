@@ -33,6 +33,14 @@ class FakeTokenizer:
         return [LETTERS.index(c) for c in text if c in LETTERS and c != "!"]
 
 
+class VirtualClock:
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
 @dataclass
 class FakeState:
     rows: list[list[int]]
@@ -47,7 +55,18 @@ class FakeRunner:
     k: float = 0.0  # extra seconds per row
     oom_above_tokens: int | None = None  # padded tokens that trigger an OOM
     eos_after: int | None = None
+    # With a VirtualClock, costs advance simulated time instead of sleeping.
+    clock: VirtualClock | None = None
+    prefill_s: float = 0.0  # fixed cost of a prefill call
+    prefill_per_token: float = 0.0  # plus this per padded prompt token
+    merge_ooms: int = 0  # raise OOM from this many merge calls
     calls: list[tuple[str, int]] = field(default_factory=list)
+
+    def _spend(self, seconds: float) -> None:
+        if self.clock is not None:
+            self.clock.t += seconds
+        elif seconds:
+            time.sleep(seconds)
 
     def _logits(self, rows: list[list[int]]) -> torch.Tensor:
         out = torch.full((len(rows), VOCAB), -10.0)
@@ -64,13 +83,13 @@ class FakeRunner:
     def prefill(self, seqs: list[list[int]]):
         width = max(len(s) for s in seqs)
         self._check_oom(len(seqs), width)
+        self._spend(self.prefill_s + self.prefill_per_token * width * len(seqs))
         self.calls.append(("prefill", len(seqs)))
         return FakeState([list(s) for s in seqs], width), self._logits(seqs)
 
     def decode(self, state: FakeState, tokens: list[int]):
         self._check_oom(len(state.rows), state.width + 1)
-        if self.t0 or self.k:
-            time.sleep(self.t0 + self.k * len(state.rows))
+        self._spend(self.t0 + self.k * len(state.rows))
         self.calls.append(("decode", len(state.rows)))
         for r, t in zip(state.rows, tokens, strict=True):
             r.append(t)
@@ -78,6 +97,9 @@ class FakeRunner:
         return self._logits(state.rows)
 
     def merge(self, a: FakeState, b: FakeState) -> FakeState:
+        if self.merge_ooms > 0:
+            self.merge_ooms -= 1
+            raise torch.OutOfMemoryError("fake: out of memory in merge")
         return FakeState(a.rows + b.rows, max(a.width, b.width))
 
     def select(self, state: FakeState, keep: list[int]) -> FakeState:

@@ -84,7 +84,7 @@ def test_telemetry_pushes_snapshots():
             assert m["type"] == "telemetry"
             assert m["mode"] == "aimd" and m["batch_limit"] == 16
             assert m["memory"]["limit_bytes"] == 1 << 30
-            assert "tpot_p95_ms" in m and "busy_ratio" in m
+            assert "decode_step_p95_ms" in m and "controller_p95_ms" in m and "busy_ratio" in m
         assert b["t"] > a["t"]
 
 
