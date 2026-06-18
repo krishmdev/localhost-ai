@@ -88,8 +88,8 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "p95 TPOT (5 s)",
-      "description": "p95 of scheduler iteration time over the last 5 s",
+      "title": "p95 decode step (5 s)",
+      "description": "p95 wall time of decode steps over the last 5 s, the latency the controller holds under the SLO",
       "datasource": {
         "type": "prometheus",
         "uid": "lhai-prom"
@@ -106,8 +106,8 @@
             "type": "prometheus",
             "uid": "lhai-prom"
           },
-          "expr": "lhai_tpot_p95_seconds",
-          "legendFormat": "p95 TPOT (5 s)",
+          "expr": "lhai_decode_step_p95_seconds",
+          "legendFormat": "p95 decode step (5 s)",
           "refId": "A",
           "range": true
         }
@@ -361,8 +361,8 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "p95 time per output token vs SLO",
-      "description": "Above the SLO line the controller shrinks L by 20%; below 90% of it (with a saturated batch and memory headroom) it grows L by 10%.",
+      "title": "p95 decode-step time vs TPOT SLO",
+      "description": "The controller watches decode-step time: above the SLO line it shrinks L by 20%; below 90% of it (with a saturated batch and memory headroom) it grows L by 10%. The iteration line adds prefill stalls, which is what a stream feels.",
       "datasource": {
         "type": "prometheus",
         "uid": "lhai-prom"
@@ -379,8 +379,8 @@
             "type": "prometheus",
             "uid": "lhai-prom"
           },
-          "expr": "lhai_tpot_p95_seconds",
-          "legendFormat": "p95 TPOT",
+          "expr": "lhai_decode_step_p95_seconds",
+          "legendFormat": "p95 decode step",
           "refId": "A",
           "range": true
         },
@@ -392,6 +392,16 @@
           "expr": "lhai_slo_tpot_seconds",
           "legendFormat": "SLO",
           "refId": "B",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "lhai-prom"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(lhai_step_seconds_bucket[30s])))",
+          "legendFormat": "p95 iteration (incl. prefill)",
+          "refId": "C",
           "range": true
         }
       ],
@@ -421,7 +431,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "p95 TPOT"
+              "options": "p95 decode step"
             },
             "properties": [
               {
@@ -448,6 +458,25 @@
                 "value": {
                   "mode": "fixed",
                   "fixedColor": "#c3c2b7"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95 iteration (incl. prefill)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#d95926"
                 }
               },
               {
@@ -1049,7 +1078,7 @@
     {
       "id": 13,
       "type": "timeseries",
-      "title": "Engine busy ratio",
+      "title": "Engine busy ratio and KV cache",
       "description": "Share of wall time the compute thread spent in prefill/decode. Device-agnostic utilization; on NVIDIA the GPU utilization panel is the hardware view.",
       "datasource": {
         "type": "prometheus",

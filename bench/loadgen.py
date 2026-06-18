@@ -57,8 +57,8 @@ class RunSummary:
     out_tok_per_s: float
     ttft_p50_ms: float | None
     ttft_p95_ms: float | None
-    tpot_p50_ms: float | None
-    tpot_p95_ms: float | None
+    req_tpot_p50_ms: float | None  # client-side, per request: (last - first token) / (n - 1)
+    req_tpot_p95_ms: float | None
     e2e_p50_ms: float | None
     e2e_p95_ms: float | None
     slo_attainment: float | None
@@ -140,7 +140,9 @@ async def telemetry(url: str, token: str, sink: list, stop: asyncio.Event, t_ori
                     "batch_limit": msg.get("batch_limit"),
                     "running": msg.get("running"),
                     "queued": msg.get("queued"),
-                    "tpot_p95_ms": msg.get("tpot_p95_ms"),
+                    "decode_step_p95_ms": msg.get("decode_step_p95_ms"),
+                    "controller_p95_ms": msg.get("controller_p95_ms"),
+                    "iteration_p95_ms": msg.get("iteration_p95_ms"),
                     "tokens_per_s": msg.get("tokens_per_s"),
                     "busy_ratio": msg.get("busy_ratio"),
                     "headroom_frac": mem.get("headroom_frac"),
@@ -196,7 +198,7 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
         out_tok_per_s=round(sum(r.tokens for r in ok) / span, 2),
         ttft_p50_ms=ms(pct([r.ttft for r in ok if r.ttft is not None], 0.5)),
         ttft_p95_ms=ms(pct([r.ttft for r in ok if r.ttft is not None], 0.95)),
-        tpot_p50_ms=ms(pct(tpots, 0.5)), tpot_p95_ms=ms(pct(tpots, 0.95)),
+        req_tpot_p50_ms=ms(pct(tpots, 0.5)), req_tpot_p95_ms=ms(pct(tpots, 0.95)),
         e2e_p50_ms=ms(pct([r.end - r.start for r in ok], 0.5)),
         e2e_p95_ms=ms(pct([r.end - r.start for r in ok], 0.95)),
         slo_attainment=(round(sum(t <= slo_ms / 1e3 for t in tpots) / len(tpots), 4)
@@ -265,10 +267,10 @@ async def main_async(args) -> dict:
         # SLO = factor x the median TPOT of a single request running alone.
         await set_controller(args.url, args.admin_token, "fixed:1", None)
         cal = await run_point(args.url, "fixed:1", 1, args, prompts, slo or 0)
-        slo = round(args.calibrate_slo * cal.tpot_p50_ms, 1)
-        calibration = {"factor": args.calibrate_slo, "baseline_tpot_p50_ms": cal.tpot_p50_ms,
+        slo = round(args.calibrate_slo * cal.req_tpot_p50_ms, 1)
+        calibration = {"factor": args.calibrate_slo, "baseline_tpot_p50_ms": cal.req_tpot_p50_ms,
                        "slo_tpot_ms": slo}
-        print(f"calibrated SLO: {slo} ms ({args.calibrate_slo} x {cal.tpot_p50_ms} ms)",
+        print(f"calibrated SLO: {slo} ms ({args.calibrate_slo} x {cal.req_tpot_p50_ms} ms)",
               file=sys.stderr)
 
     for mode in modes:
@@ -283,7 +285,8 @@ async def main_async(args) -> dict:
             await asyncio.sleep(args.settle)
             s = await run_point(args.url, mode, conc, args, prompts, slo or 0)
             print(f"{mode:>9} c={conc:<3} req/s={s.req_per_s:<7} tok/s={s.out_tok_per_s:<8} "
-                  f"ttft_p95={s.ttft_p95_ms} tpot_p95={s.tpot_p95_ms} slo={s.slo_attainment} "
+                  f"ttft_p95={s.ttft_p95_ms} req_tpot_p95={s.req_tpot_p95_ms} "
+                  f"slo={s.slo_attainment} "
                   f"err={s.errors} alive={s.server_alive_after}", file=sys.stderr, flush=True)
             runs.append(asdict(s))
 
