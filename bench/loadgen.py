@@ -207,6 +207,29 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
     )
 
 
+async def preflight(url: str, token: str) -> dict:
+    """What the server's memory probe sees right before the run, plus host swap. On a Mac the
+    MPS limit is capped by what the OS can still hand out, so a busy machine shrinks it."""
+    ws_url = url.replace("http", "ws", 1) + "/v1/ws/telemetry"
+    if token:
+        ws_url += f"?token={token}"
+    snap: dict = {}
+    with contextlib.suppress(Exception):
+        async with websockets.connect(ws_url, open_timeout=5) as ws:
+            snap = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+    swap = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True)
+    mem = snap.get("memory") or {}
+    out = {"device": snap.get("device"), "dtype": snap.get("dtype"), "memory": mem,
+           "host_swap": swap.stdout.strip() or None, "warnings": []}
+    limit = mem.get("limit_bytes") or 0
+    if snap.get("device") == "mps" and limit < 4 * 2**30:
+        out["warnings"].append(f"MPS memory limit is only {limit / 2**30:.2f} GiB; other "
+                               "processes are holding unified memory")
+    for w in out["warnings"]:
+        print(f"preflight warning: {w}", file=sys.stderr)
+    return out
+
+
 async def server_ready(url: str, timeout: float = 3.0) -> bool:
     try:
         async with httpx.AsyncClient(base_url=url, timeout=timeout) as c:
@@ -256,6 +279,7 @@ async def main_async(args) -> dict:
     await wait_ready(args.url)
     async with httpx.AsyncClient(base_url=args.url, timeout=10) as c:
         models = (await c.get("/v1/models")).json()
+    pre = await preflight(args.url, args.admin_token)
     modes = args.modes.split(",")
     concs = [int(x) for x in args.concurrency.split(",")]
     slo = args.slo_tpot_ms
@@ -299,6 +323,7 @@ async def main_async(args) -> dict:
         "model": models["data"][0],
         "slo_tpot_ms": slo,
         "calibration": calibration,
+        "preflight": pre,
         "runs": runs,
         "manifest": manifest(args.manifest, extra),
     }
