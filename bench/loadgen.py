@@ -63,6 +63,7 @@ class RunSummary:
     e2e_p95_ms: float | None
     slo_attainment: float | None
     server_alive_after: bool
+    host_load_1m: list = field(default_factory=list)  # [before, after] the point
     error_kinds: dict = field(default_factory=dict)
     trace: list = field(default_factory=list)
 
@@ -161,6 +162,7 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
     t_origin = time.perf_counter()
     tel = asyncio.create_task(telemetry(url, args.admin_token, trace, stop_tel, t_origin))
     rng = random.Random(f"{args.seed}-{mode}-{conc}")
+    load_before = round(os.getloadavg()[0], 2)
     deadline = t_origin + args.warmup + args.duration
     measure_from = t_origin + args.warmup
 
@@ -204,6 +206,7 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
         slo_attainment=(round(sum(t <= slo_ms / 1e3 for t in tpots) / len(tpots), 4)
                         if tpots else None),
         server_alive_after=alive, error_kinds=kinds, trace=trace,
+        host_load_1m=[load_before, round(os.getloadavg()[0], 2)],
     )
 
 
