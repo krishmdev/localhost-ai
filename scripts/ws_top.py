@@ -20,7 +20,7 @@ from rich.table import Table
 from rich.text import Text
 
 SPARK = "▁▂▃▄▅▆▇█"
-BAR_W = 28
+BAR_W = 16
 
 
 def bar(frac: float | None, style: str = "blue") -> Text:
@@ -91,7 +91,7 @@ class View:
 
         p95, slo = m.get("decode_step_p95_ms"), m.get("slo_tpot_ms") or 0
         over = p95 is not None and slo and p95 > slo
-        g.add_row("p95 decode step", fmt_ms(p95),
+        g.add_row("p95 decode", fmt_ms(p95),
                   bar(None if p95 is None or not slo else p95 / slo,
                       "red" if over else "blue"),
                   ("over SLO" if over else "of SLO") + f" {slo:.0f} ms")
