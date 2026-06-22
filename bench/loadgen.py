@@ -64,6 +64,7 @@ class RunSummary:
     slo_attainment: float | None
     server_alive_after: bool
     host_load_1m: list = field(default_factory=list)  # [before, after] the point
+    host_cpu_idle_before: float | None = None  # percent, from `top` (macOS hosts only)
     error_kinds: dict = field(default_factory=dict)
     trace: list = field(default_factory=list)
 
@@ -80,6 +81,19 @@ def pct(xs: list[float], q: float) -> float | None:
 
 def ms(v: float | None) -> float | None:
     return None if v is None else round(v * 1e3, 2)
+
+
+def cpu_idle() -> float | None:
+    try:
+        out = subprocess.run(["top", "-l", "2", "-n", "0", "-s", "1"], capture_output=True,
+                             text=True, timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = [ln for ln in out.splitlines() if ln.startswith("CPU usage")]
+    try:
+        return float(lines[-1].split(",")[2].split("%")[0])
+    except (IndexError, ValueError):
+        return None
 
 
 async def one_request(client: httpx.AsyncClient, prompt: str, max_tokens: int,
@@ -163,6 +177,7 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
     tel = asyncio.create_task(telemetry(url, args.admin_token, trace, stop_tel, t_origin))
     rng = random.Random(f"{args.seed}-{mode}-{conc}")
     load_before = round(os.getloadavg()[0], 2)
+    idle_before = cpu_idle()
     deadline = t_origin + args.warmup + args.duration
     measure_from = t_origin + args.warmup
 
@@ -207,6 +222,7 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
                         if tpots else None),
         server_alive_after=alive, error_kinds=kinds, trace=trace,
         host_load_1m=[load_before, round(os.getloadavg()[0], 2)],
+        host_cpu_idle_before=idle_before,
     )
 
 

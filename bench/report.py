@@ -45,7 +45,7 @@ def host_line(m: dict) -> str:
 
 def sweep_table(d: dict) -> list[str]:
     rows = ["| controller | clients | req/s | output tok/s | TTFT p50 / p95 (ms) | "
-            "request TPOT p50 / p95 (ms) | SLO attainment | errors | host load (1 min) |",
+            "request TPOT p50 / p95 (ms) | SLO attainment | errors | host CPU idle before |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in d["runs"]:
         if r.get("skipped"):
@@ -53,7 +53,8 @@ def sweep_table(d: dict) -> list[str]:
                         " | | | | | |")
             continue
         slo = "n/a" if r["slo_attainment"] is None else f"{r['slo_attainment'] * 100:.0f}%"
-        load = "/".join(str(x) for x in r.get("host_load_1m", [])) or "n/a"
+        idle = r.get("host_cpu_idle_before")
+        load = "n/a" if idle is None else f"{idle:.0f}%"
         rows.append(
             f"| {r['mode']} | {r['concurrency']} | {r['req_per_s']:.2f} | "
             f"{r['out_tok_per_s']:.0f} | {fmt(r['ttft_p50_ms'], 0)} / {fmt(r['ttft_p95_ms'], 0)} | "
