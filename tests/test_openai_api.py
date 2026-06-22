@@ -118,3 +118,15 @@ def test_admin_controller_and_auth():
         assert r.json()["mode"] == "aimd" and r.json()["slo_tpot_ms"] == 40
         assert c.get("/healthz").json() == {"status": "ok"}
         assert c.get("/readyz").status_code == 200
+
+
+def test_egress_route_reports_blocked_and_open(monkeypatch):
+    from localhost_ai import egress
+
+    app = create_app(fake_service())
+    with TestClient(app) as c:
+        monkeypatch.setattr(egress, "probe", lambda timeout: {"1.1.1.1:443": "blocked (x)"})
+        assert c.get("/v1/admin/egress").json()["ok"] is True
+        assert c.get("/v1/admin/egress?expect=open").status_code == 409
+        monkeypatch.setattr(egress, "probe", lambda timeout: {"1.1.1.1:443": "open"})
+        assert c.get("/v1/admin/egress").status_code == 409

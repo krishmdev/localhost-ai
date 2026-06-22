@@ -62,6 +62,21 @@ async def decisions(limit: int = 100, svc: Service = Depends(require_admin)) -> 
     return {"decisions": [d.to_dict() for d in log]}
 
 
+@router.get("/v1/admin/egress")
+async def egress(expect: str = "blocked", svc: Service = Depends(require_admin)):
+    """Run the egress canary inside the server process. 200 when the result matches `expect`
+    (blocked: every connect failed; open: every connect worked), 409 otherwise."""
+    import asyncio
+
+    from ..egress import probe
+
+    results = await asyncio.to_thread(probe, 2.0)
+    opened = [k for k, v in results.items() if v == "open"]
+    ok = not opened if expect == "blocked" else len(opened) == len(results)
+    return JSONResponse({"expect": expect, "ok": ok, "results": results},
+                        status_code=200 if ok else 409)
+
+
 @router.post("/v1/admin/models/load")
 async def load_model(body: ModelLoad, svc: Service = Depends(require_admin)) -> dict:
     if body.model not in svc.model_names:

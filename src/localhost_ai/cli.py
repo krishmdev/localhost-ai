@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import socket
 import sys
 
 import typer
@@ -86,9 +85,6 @@ def models_verify() -> None:
     raise typer.Exit(1 if problems else 0)
 
 
-EGRESS_TARGETS = [("1.1.1.1", 443), ("api.openai.com", 443), ("huggingface.co", 443)]
-
-
 @app.command("egress-check")
 def egress_check(
     expect: str = typer.Option("blocked", help="blocked: exit 0 only if every connect fails; "
@@ -96,13 +92,9 @@ def egress_check(
     timeout: float = 3.0,
 ) -> None:
     """Try to reach the internet from this process (the offline canary)."""
-    results = {}
-    for host, port in EGRESS_TARGETS:
-        try:
-            socket.create_connection((host, port), timeout=timeout).close()
-            results[f"{host}:{port}"] = "open"
-        except OSError as exc:
-            results[f"{host}:{port}"] = f"blocked ({type(exc).__name__}: {exc.strerror or exc})"
+    from .egress import probe
+
+    results = probe(timeout)
     typer.echo(json.dumps(results, indent=2))
     opened = [k for k, v in results.items() if v == "open"]
     ok = not opened if expect == "blocked" else len(opened) == len(results)
