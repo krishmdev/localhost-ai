@@ -1,0 +1,35 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.28"
+      - run: uv sync --frozen --extra cpu --extra dev
+      - run: uv run ruff check .
+      - run: uv run pytest -q
+
+  offline-runtime:
+    # Setup phase (network): pinned model + image. Runtime phase: a container with no network.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.28"
+      - run: uv sync --frozen --extra cpu
+      - run: uv run lhai models pull
+      - run: docker build -t localhost-ai:cpu .
+      - name: runtime with --network none
+        run: |
+          docker run --rm --network none \
+            -v "$PWD/.models:/models:ro" -v "$PWD/scripts:/scripts:ro" \
+            localhost-ai:cpu sh -c "lhai models verify && lhai egress-check --timeout 2 && python /scripts/selftest.py"
+      - name: canary is not vacuous (it connects when the network is allowed)
+        run: docker run --rm localhost-ai:cpu lhai egress-check --expect open
