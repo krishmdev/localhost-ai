@@ -32,3 +32,20 @@ arm64). This project calls no paid APIs and uses no keys.
 - **MPS benchmark** (`bench/results/mps-native.json`): ran under the compute lease with other
   agents' workloads on the machine. CPU idle was 55-85% before each point, and the memory probe
   saw a 3.27 GiB MPS limit because swap was nearly full. Both are recorded in the file.
+- **Docker CPU sweep** (`bench/results/cpu-docker.json`): the full 3 modes x 6 concurrencies ran
+  under the lease on a contended host (CPU idle 35-69%). The calibrated SLO (1883 ms) came out
+  loose, so every point meets it. Treat the run as rough throughput-scaling data only. The
+  Grafana screenshot `docs/grafana.png` was captured at the end of it.
+- **Memory pressure** (`bench/results/cpu-mempressure.json`, 1.5 GB cgroup, 32 clients, 512
+  tokens): neither mode was OOM-killed.
+  - fixed:32 completed 41 requests with 0 errors. The KV admission budget kept it to 9 or fewer
+    rows.
+  - aimd completed 28 requests with 12 read timeouts. Its KV ceiling clamped L to 1-2.
+  - The expected "fixed OOMs, AIMD survives" result did not happen. See the README limitations.
+- **Offline check** (`make offline-check`, under `.tools/offline-run`):
+  - `models verify` passed.
+  - The egress canary was blocked (EPERM) in the CLI process and inside the running server
+    (`/v1/admin/egress`).
+  - A REST completion and a WebSocket generation both worked offline.
+  - Companion check, unsandboxed: `lhai egress-check --expect open` connects to all three
+    targets.

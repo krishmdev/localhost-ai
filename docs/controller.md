@@ -94,4 +94,6 @@ telemetry WebSocket during the highest-concurrency AIMD run). See `bench/RESULTS
 full numbers.
 
 <!-- trace:begin -->
+![AIMD trace, Apple GPU (MPS), native](../bench/figures/aimd_trace_mps-native.png)
+![AIMD trace, CPU, Docker (linux/arm64 VM; contended shared host, rough)](../bench/figures/aimd_trace_cpu-docker.png)
 <!-- trace:end -->

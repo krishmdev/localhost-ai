@@ -148,9 +148,18 @@ treat absolute numbers as rough.
 | Apple GPU (MPS), native | fixed:1 | 64 | 10 | 23.8 ms | 71.9 ms | 100% | 147.5 s |
 | Apple GPU (MPS), native | fixed:32 | 64 | 207 | 110.3 ms | 71.9 ms | 3% | 11.5 s |
 | Apple GPU (MPS), native | aimd | 64 | 151 | 72.5 ms | 71.9 ms | 93% | 21.6 s |
+| CPU, Docker (linux/arm64 VM; contended shared host, rough) | fixed:1 | 64 | 0 | 183.4 ms | 1883.2 ms | 100% | 284.2 s |
+| CPU, Docker (linux/arm64 VM; contended shared host, rough) | fixed:32 | 64 | 6 | 713.1 ms | 1883.2 ms | 100% | 87.2 s |
+| CPU, Docker (linux/arm64 VM; contended shared host, rough) | aimd | 64 | 6 | 434.5 ms | 1883.2 ms | 100% | 130.7 s |
 | NVIDIA CUDA | any | | not measured | | | | |
 
 - Apple GPU (MPS), native, 64 clients: most throughput from `fixed:32` (207 tok/s, 3% SLO attainment); `aimd` 151 tok/s at 93% attainment, L between 14 and 18 during the run.
+- CPU, Docker (linux/arm64 VM; contended shared host, rough), 64 clients: most throughput from `fixed:32` (6 tok/s, 100% SLO attainment); `aimd` 6 tok/s at 100% attainment, L between 16 and 16 during the run.
+
+Memory pressure (CPU container capped at 1500m, 32 clients, 512 tokens each):
+
+- fixed:32: running, 41 requests completed, 0 failed.
+- aimd: running, 28 requests completed, 12 failed.
 <!-- results:end -->
 
 Grafana dashboard during the Docker sweep:
@@ -207,6 +216,13 @@ Models are pinned in `models.yaml` (repo and commit) and hashed in `models.lock`
 - The controller holds decode-step latency, not end-to-end latency. TTFT grows with queueing
   when the batch is capped.
 - Benchmarks ran on a shared machine; see the manifests.
+- The memory-pressure run did not show what the plan hoped for. With a 1.5 GB container limit
+  neither mode was OOM-killed, because the scheduler's KV admission budget applies in fixed mode
+  too and kept fixed:32 to a handful of rows. AIMD did worse than fixed. Its KV ceiling
+  estimates every row at the longest recent request (prompt + half of max_tokens), which is
+  stricter than the per-request admission check, so L was clamped down to 1-2. Twelve AIMD
+  requests then timed out in the queue. Making the ceiling use the same per-request estimate as
+  admission is the obvious next fix, but it hasn't been re-measured.
 
 ## Layout
 

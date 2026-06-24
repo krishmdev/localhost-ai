@@ -17,7 +17,7 @@ import plotstyle  # noqa: E402
 
 plt = plotstyle.plt
 FIG = HERE / "figures"
-TARGET_NAMES = {"cpu-docker": "CPU, Docker (linux/arm64 VM)",
+TARGET_NAMES = {"cpu-docker": "CPU, Docker (linux/arm64 VM; contended shared host, rough)",
                 "mps-native": "Apple GPU (MPS), native"}
 
 
@@ -194,6 +194,17 @@ def main() -> None:
                 f"Host swap: {pre.get('host_swap')}."
                 + (" Warnings: " + "; ".join(pre["warnings"]) if pre.get("warnings") else ""),
                 "", f"Host: {host_line(d['manifest'])}", ""]
+        if label == "cpu-docker":
+            idles = [r["host_cpu_idle_before"] for r in d["runs"]
+                     if r.get("host_cpu_idle_before") is not None]
+            out += [f"These numbers are rough. Other agents' containers and builds shared the "
+                    f"Docker VM and the host during this sweep (host CPU idle before each point "
+                    f"ranged {min(idles):.0f}-{max(idles):.0f}%; see `manifest` in "
+                    f"`bench/results/cpu-docker.json`). The single-client baseline used for "
+                    f"calibration was measured under that load, so the calibrated SLO "
+                    f"({d['slo_tpot_ms']} ms) is loose and every point meets it: this sweep "
+                    "shows throughput scaling with batch size on CPU, not the controller's SLO "
+                    "behaviour.", ""]
         out += sweep_table(d)
         out += ["", f"![{label} sweep](figures/{plot_sweep(d, label)})", ""]
         tr = plot_trace(d, label)
@@ -228,6 +239,19 @@ def main() -> None:
                        f"(exit {st.get('exit_code')}) | "
                        f"{fmt(None if peak is None else peak / 2**30, 2, ' GiB')} | "
                        f"{r['out_tok_per_s']:.0f} |")
+        out.append("")
+        for r in mp["runs"]:
+            tr = r.get("trace") or []
+            ls = [p["batch_limit"] for p in tr if p.get("batch_limit") is not None]
+            rn = [p["running"] for p in tr if p.get("running") is not None]
+            hr = [p["headroom_frac"] for p in tr if p.get("headroom_frac") is not None]
+            acts: dict[str, int] = {}
+            for p in tr:
+                if p.get("action") and p["action"] != "hold":
+                    acts[p["action"]] = acts.get(p["action"], 0) + 1
+            out.append(f"- {r['mode']}: batch limit {min(ls)}-{max(ls)}, running rows at most "
+                       f"{max(rn)}, headroom {min(hr):.0%}-{max(hr):.0%}, non-hold telemetry "
+                       f"samples {acts or 'none'}, error kinds {r['error_kinds'] or 'none'}.")
         out += ["", f"![memory pressure](figures/{plot_mem(mp)})", "",
                 f"Host: {host_line(mp['manifest'])}", ""]
     (HERE / "RESULTS.md").write_text("\n".join(out))
