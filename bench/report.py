@@ -125,7 +125,8 @@ def plot_trace(d: dict, label: str) -> str | None:
             va="bottom")
     a2.set_ylabel("ms")
     a2.set_ylim(bottom=0)
-    a2.set_xlabel("seconds into the run")
+    a2.legend(frameon=False, fontsize=9, loc="lower right")
+    a2.set_xlabel("seconds into the run (clients stop at the end; the batch drains)")
     a1.set_title(f"AIMD, {TARGET_NAMES.get(label, label)}, {r['concurrency']} clients",
                  loc="left")
     fig.tight_layout()
@@ -230,7 +231,79 @@ def main() -> None:
         out += ["", f"![memory pressure](figures/{plot_mem(mp)})", "",
                 f"Host: {host_line(mp['manifest'])}", ""]
     (HERE / "RESULTS.md").write_text("\n".join(out))
+    traces = [f"![AIMD trace, {TARGET_NAMES[lbl]}](../bench/figures/aimd_trace_{lbl}.png)"
+              for lbl in ("mps-native", "cpu-docker") if (FIG / f"aimd_trace_{lbl}.png").exists()]
+    write_section(ROOT / "docs" / "controller.md", "trace", "\n".join(traces))
+    write_section(ROOT / "README.md", "results", "\n".join(readme_summary()))
     print("wrote bench/RESULTS.md")
+
+
+def write_section(path: Path, name: str, body: str) -> None:
+    text = path.read_text()
+    begin, end = f"<!-- {name}:begin -->", f"<!-- {name}:end -->"
+    if begin not in text:
+        return
+    head, rest = text.split(begin, 1)
+    _, tail = rest.split(end, 1)
+    path.write_text(f"{head}{begin}\n{body}\n{end}{tail}")
+
+
+def readme_summary() -> list[str]:
+    """Short results table for the README: the busiest point per controller and target."""
+    rows = ["| target | controller | clients | output tok/s | request TPOT p95 | SLO | "
+            "SLO attainment | TTFT p95 |", "|---|---|---:|---:|---:|---:|---:|---:|"]
+    for label in ("mps-native", "cpu-docker"):
+        d = load(label)
+        if d is None:
+            continue
+        top = max(r["concurrency"] for r in d["runs"] if not r.get("skipped"))
+        for mode in ("fixed:1", "fixed:32", "aimd"):
+            r = next((r for r in d["runs"] if r.get("mode") == mode
+                      and r.get("concurrency") == top and not r.get("skipped")), None)
+            if r is None:
+                continue
+            att = "n/a" if r["slo_attainment"] is None else f"{r['slo_attainment']:.0%}"
+            rows.append(f"| {TARGET_NAMES[label]} | {mode} | {top} | {r['out_tok_per_s']:.0f} | "
+                        f"{fmt(r['req_tpot_p95_ms'])} ms | {d['slo_tpot_ms']} ms | {att} | "
+                        f"{fmt(r['ttft_p95_ms'] / 1e3 if r['ttft_p95_ms'] else None, 1)} s |")
+    rows.append("| NVIDIA CUDA | any | | not measured | | | | |")
+    rows.append("")
+    for label in ("mps-native", "cpu-docker"):
+        d = load(label)
+        if d is None:
+            continue
+        top = max(r["concurrency"] for r in d["runs"] if not r.get("skipped"))
+        at = {r["mode"]: r for r in d["runs"]
+              if r.get("concurrency") == top and not r.get("skipped")}
+        if not at:
+            continue
+        fastest = max(at.values(), key=lambda r: r["out_tok_per_s"])
+        steadiest = max(at.values(), key=lambda r: (r["slo_attainment"] or 0,
+                                                    r["out_tok_per_s"]))
+        line = (f"- {TARGET_NAMES[label]}, {top} clients: most throughput from "
+                f"`{fastest['mode']}` ({fastest['out_tok_per_s']:.0f} tok/s, "
+                f"{(fastest['slo_attainment'] or 0):.0%} SLO attainment); ")
+        a = at.get("aimd")
+        if a:
+            ls = [p["batch_limit"] for p in a.get("trace", [])
+                  if p.get("batch_limit") is not None]
+            line += (f"`aimd` {a['out_tok_per_s']:.0f} tok/s at "
+                     f"{(a['slo_attainment'] or 0):.0%} attainment, L between "
+                     f"{min(ls)} and {max(ls)} during the run")
+        else:
+            line += f"best attainment `{steadiest['mode']}`"
+        rows.append(line + ".")
+    mp = load("cpu-mempressure")
+    if mp:
+        rows += ["", f"Memory pressure (CPU container capped at {mp['config']['mem_limit']}, "
+                 f"{mp['config']['concurrency']} clients, {mp['config']['max_tokens']} tokens "
+                 "each):", ""]
+        for r in mp["runs"]:
+            st = r["container"]
+            outcome = "OOM-killed by the kernel" if st.get("oom_killed") else st.get("status")
+            rows.append(f"- {r['mode']}: {outcome}, "
+                        f"{r['completed']} requests completed, {r['errors']} failed.")
+    return rows
 
 
 if __name__ == "__main__":
