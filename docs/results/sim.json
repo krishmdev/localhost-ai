@@ -1409,7 +1409,7 @@
     }
   },
   "manifest": {
-    "recorded_at": "2026-09-23T07:17:26-0400",
+    "recorded_at": "2026-09-23T07:29:11-0400",
     "host": {
       "chip": "Apple M1 Pro",
       "ram_gb": 16.0,
@@ -1418,8 +1418,8 @@
       "power": "Now drawing from 'AC Power'"
     },
     "compute_lease": {
-      "held": false,
-      "holder": null
+      "held": true,
+      "holder": "localhost-ai-bench"
     },
     "extra": {
       "kind": "simulator"

@@ -91,7 +91,7 @@ bar = ts("Controller actions per minute",
      series_override("clamp", "#c98500")], decimals=0)
 bar["fieldConfig"]["defaults"]["custom"].update({"drawStyle": "bars", "fillOpacity": 60, "lineWidth": 1, "stacking": {"mode": "normal", "group": "A"}})
 panels.append(bar)
-panels.append(ts("Engine busy ratio and KV cache",
+panels.append(ts("Engine busy ratio",
     [target("lhai_engine_busy_ratio", "busy ratio", "A")],
     {"h": 7, "w": 12, "x": 0, "y": 36}, "percentunit",
     "Share of wall time the compute thread spent in prefill/decode. Device-agnostic utilization; on NVIDIA the GPU utilization panel is the hardware view.",

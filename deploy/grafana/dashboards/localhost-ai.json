@@ -1078,7 +1078,7 @@
     {
       "id": 13,
       "type": "timeseries",
-      "title": "Engine busy ratio and KV cache",
+      "title": "Engine busy ratio",
       "description": "Share of wall time the compute thread spent in prefill/decode. Device-agnostic utilization; on NVIDIA the GPU utilization panel is the hardware view.",
       "datasource": {
         "type": "prometheus",

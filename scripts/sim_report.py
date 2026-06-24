@@ -151,8 +151,60 @@ def main() -> None:
     (ROOT / "docs" / "results" / "sim.json").write_text(json.dumps(out, indent=1) + "\n")
     for key in ("S1", "S2", "S3", "S4", "S5"):
         plot(key, ROOT / "docs" / "figures" / f"sim_{key}.png")
+    write_section(ROOT / "docs" / "controller.md", "sim", sim_markdown(results, agg))
     for key, a in agg.items():
         print(key, json.dumps(a))
+
+
+def write_section(path: Path, name: str, body: str) -> None:
+    text = path.read_text()
+    begin, end = f"<!-- {name}:begin -->", f"<!-- {name}:end -->"
+    head, rest = text.split(begin, 1)
+    _, tail = rest.split(end, 1)
+    path.write_text(f"{head}{begin}\n{body}\n{end}{tail}")
+
+
+def sim_markdown(results: dict, agg: dict) -> str:
+    def pct(x: float) -> str:
+        return f"{x * 100:.0f}%"
+
+    n = len(SEEDS)
+    s1, s2, s3, s4, s5 = (agg[k] for k in ("S1", "S2", "S3", "S4", "S5"))
+    b = results["S1"]["b_star"]
+    lo, hi = results["S1"]["band"]
+    s6_ok = agg["S6"]["oom_halved_all_seeds"]
+    rows = [
+        f"Generated from `docs/results/sim.json` ({n} seeds, {WARMUP}-interval warm-up, "
+        f"b* = {b}, band [{lo}, {hi}]).",
+        "",
+        "| scenario | plan bound | measured (worst seed) | met |",
+        "|---|---|---|---|",
+        f"| S1 no noise | L in band 100% of intervals | {pct(s1['min_in_band'])} in band, "
+        f"L min {s1['min_L']} | {'yes' if s1['min_in_band'] == 1 else 'no'} |",
+        f"| S2 5% noise | band >= 95%, L >= 0.64 b*, violations <= 10% | "
+        f"{pct(s2['min_in_band'])} in band, L min {s2['min_L']} "
+        f"({s2['min_L_over_b_star']} b*), violations {pct(s2['max_slo_violation_frac'])} | "
+        f"{'yes' if s2['min_in_band'] >= .95 and s2['seeds_L_ge_0_64_b_star'] == n and s2['max_slo_violation_frac'] <= .1 else 'no'} |",
+        f"| S3 15% noise | violations <= 20%, L >= 0.5 b* | violations "
+        f"{pct(s3['max_slo_violation_frac'])}; L >= 0.5 b* on {s3['seeds_L_ge_half_b_star']}/{n}"
+        f" seeds, worst {s3['min_L']} ({s3['min_L_over_b_star']} b*) | "
+        f"{'yes' if s3['seeds_L_ge_half_b_star'] == n and s3['max_slo_violation_frac'] <= .2 else 'violations yes, floor no (reported, not tuned)'} |",
+        f"| S4 b* halves | back in new band within 6 intervals | "
+        f"{s4['max_intervals_to_new_band']} intervals | "
+        f"{'yes' if s4['max_intervals_to_new_band'] <= 6 else 'no'} |",
+        f"| S5 headroom halves | above low watermark within 3 intervals | "
+        f"{s5['max_intervals_to_headroom_above_low_wm']} intervals | "
+        f"{'yes' if s5['max_intervals_to_headroom_above_low_wm'] <= 3 else 'no'} |",
+        f"| S6 OOM | next interval L <= floor(L/2) | "
+        f"{'halved on every seed' if s6_ok else 'not halved on some seed'} | "
+        f"{'yes' if s6_ok else 'no'} |",
+        f"| all | L <= KV ceiling, memory <= limit | peak memory "
+        f"{max(a['max_used_frac'] for a in agg.values()):.2f} of limit | "
+        f"{'yes' if all(a['L_le_ceiling_all_seeds'] for a in agg.values()) else 'no'} |",
+        "",
+    ]
+    rows += [f"![{k}](figures/sim_{k}.png)" for k in ("S1", "S2", "S3", "S4", "S5")]
+    return "\n".join(rows)
 
 
 if __name__ == "__main__":
