@@ -34,3 +34,15 @@ def test_cgroup_cpu_quota(tmp_path):
     assert cgroup_cpu_limit(tmp_path) == 2.5
     (tmp_path / "cpu.max").write_text("max 100000\n")
     assert cgroup_cpu_limit(tmp_path) is None
+
+
+def test_settings_reject_nonsense():
+    import pytest
+    from pydantic import ValidationError
+
+    from localhost_ai.config import Settings
+
+    with pytest.raises(ValidationError):
+        Settings(n_min=0)
+    with pytest.raises(ValidationError):
+        Settings(mem_reserve=1.5)

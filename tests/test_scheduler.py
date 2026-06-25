@@ -264,6 +264,23 @@ def test_oom_does_not_thrash(controller):
         assert r.generated == reference(p, 14)
 
 
+@pytest.mark.parametrize("controller", ["fixed", "aimd"])
+def test_prefill_oom_with_nothing_running_does_not_livelock(controller):
+    # Two 40-token prompts prefilled together (80 padded tokens) OOM; each alone fits. With
+    # nothing running, the fixed limit never drops, so only the prefill cap gets us out.
+    runner = FakeRunner(oom_above_tokens=60)
+    ctl = FixedController(4) if controller == "fixed" else AIMDController(AIMDConfig(initial=4))
+    s = make(runner=runner, controller=ctl)
+    prompts = [[i % 30 + 1] * 40 for i in range(2)]
+    rs = [req(p, SamplingParams(temperature=0.0, max_tokens=8)) for p in prompts]
+    for r in rs:
+        s.add(r)
+    steps = drain(s, max_steps=500)
+    assert s.ooms <= 4, f"{s.ooms} OOMs in {steps} steps"
+    for p, r in zip(prompts, rs, strict=True):
+        assert r.generated == reference(p, 8)
+
+
 def test_prefill_time_does_not_drag_the_limit():
     # Closed loop, short outputs, frequent admissions: every iteration with a join pays a
     # prefill (~0.4 ms/token, a 300-token prompt ~ 125 ms). The controller only sees decode

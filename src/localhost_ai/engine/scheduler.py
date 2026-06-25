@@ -92,6 +92,10 @@ class Scheduler:
         # After an OOM, don't admit anything new until a running row finishes; otherwise the
         # preempted row goes straight back in and hits the same OOM (thrash).
         self._hold_admission = False
+        # After a multi-request prefill OOMs, prefill at most this many rows at once (halving on
+        # each further OOM, down to 1) until a running row finishes. Without it, fixed mode, whose
+        # limit never drops, retries the same prefill forever.
+        self._prefill_cap: int | None = None
         self.ttfts: deque[tuple[float, float]] = deque()
         self.tokens: deque[tuple[float, int]] = deque()
         self.kv_ceiling: int | None = None
@@ -239,6 +243,8 @@ class Scheduler:
         longest = 0
         with self._lock:
             while self.waiting and len(self.running) + len(admitted) < limit:
+                if self._prefill_cap is not None and len(admitted) >= self._prefill_cap:
+                    break
                 req = self.waiting[0]
                 n = len(req.all_ids)
                 # the prefill batch is left-padded, so its cost is rows x longest prompt
@@ -278,6 +284,9 @@ class Scheduler:
             if not self.running and len(new) == 1:
                 self._fail(new[0], "out of memory during prefill of a single request")
             else:
+                self._prefill_cap = max(1, len(new) // 2)
+                if not self.running:
+                    self._hold_admission = False  # nothing will finish; retry smaller now
                 self._requeue(new)
             return 0
         padded = len(new) * max(len(r.all_ids) for r in new)
@@ -328,6 +337,7 @@ class Scheduler:
     def _keep(self, keep: list[int]) -> None:
         if len(keep) < len(self.running):
             self._hold_admission = False  # a row left, so there's room again
+            self._prefill_cap = None
         if not keep:
             self.running, self.state = [], None
             return
@@ -411,7 +421,7 @@ class Scheduler:
         if r.detok.stopped:
             self._finish(r, "stop")
             return False
-        if r.remaining <= 0 or len(r.all_ids) >= self.cfg.max_context:
+        if r.remaining <= 0 or r.num_prompt + len(r.generated) >= self.cfg.max_context:
             self._finish(r, "length")
             return False
         return True

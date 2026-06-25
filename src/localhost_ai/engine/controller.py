@@ -187,7 +187,6 @@ class AIMDController(_Decisions):
         c = self.cfg
         self._limit = min(max(c.initial, c.min_batch), c.max_batch)
         self._epoch = 0
-        self._epoch_started: float | None = None
         self._window: deque[Sample] = deque()
         self._cooldown = 0
         self._last_oom_cut: float | None = None
@@ -236,7 +235,6 @@ class AIMDController(_Decisions):
 
     def _new_epoch(self, now: float) -> None:
         self._epoch += 1
-        self._epoch_started = now
         self._window.clear()
 
     def tick(self, obs: Observation) -> Decision:
@@ -246,8 +244,6 @@ class AIMDController(_Decisions):
     def _tick(self, obs: Observation) -> Decision:
         c = self.cfg
         now = obs.now
-        if self._epoch_started is None:
-            self._epoch_started = now
         before = self._limit
         evidence_epoch = self._epoch
         hr = obs.mem.headroom_frac if obs.mem is not None else None
