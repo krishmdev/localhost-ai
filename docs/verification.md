@@ -61,5 +61,5 @@ arm64). This project calls no paid APIs and uses no keys.
   fixed:32 completed 38 requests with 0 errors. aimd completed 28 with 9 read timeouts; L fell to
   1 in the first seconds and stayed low because headroom sat under the 20% high watermark. The
   pre-fix run is kept as `cpu-mempressure-before-ceiling-fix.json`. No AIMD advantage here.
-- **Manifests scrubbed** with `scripts/scrub_manifests.py`: process lists, container names,
+- **Manifests scrubbed** with a one-off script: process lists, container names,
   lease command and local paths removed from every committed results file.
