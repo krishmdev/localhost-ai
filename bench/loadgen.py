@@ -30,7 +30,6 @@ import httpx
 import websockets
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_MANIFEST = HERE.parents[1] / ".tools" / "run_manifest.py"
 
 
 @dataclass
@@ -280,10 +279,25 @@ async def set_controller(url: str, token: str, mode: str, slo_ms: float | None) 
         return r.json()
 
 
+def basic_manifest(extra: dict) -> dict:
+    import platform
+
+    import torch
+    import transformers
+
+    return {"recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "host": {"machine": platform.machine(), "os": platform.platform(terse=True),
+                     "python": platform.python_version(), "cpu_count": os.cpu_count()},
+            "libs": {"torch": torch.__version__, "transformers": transformers.__version__},
+            "load_1m": round(os.getloadavg()[0], 1), "extra": extra}
+
+
 def manifest(cmd: str | None, extra: dict) -> dict:
-    path = cmd or os.environ.get("LHAI_RUN_MANIFEST") or str(DEFAULT_MANIFEST)
-    if not Path(path).exists():
-        return {"error": f"run_manifest not found at {path}"}
+    """Host/workload record for the results file. LHAI_RUN_MANIFEST may point at an external
+    script that prints one JSON object; otherwise a basic built-in record is used."""
+    path = cmd or os.environ.get("LHAI_RUN_MANIFEST", "")
+    if not path or not Path(path).exists():
+        return basic_manifest(extra)
     kv = [f"{k}={v}" for k, v in extra.items()]
     out = subprocess.run([sys.executable, path, *kv], capture_output=True, text=True, timeout=60)
     try:

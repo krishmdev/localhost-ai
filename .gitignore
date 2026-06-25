@@ -12,10 +12,3 @@ dist/
 build/
 .DS_Store
 bench/results/*.tmp
-CLAUDE.md
-AGENTS.md
-GEMINI.md
-.claude/
-.kiro/
-.cursor/
-.codex/

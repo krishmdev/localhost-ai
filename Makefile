@@ -1,5 +1,9 @@
-TOOLS ?= ../.tools
 PORT ?= 8000
+# Optional host wrappers, empty by default:
+#   LHAI_OFFLINE_RUN  command that runs its arguments with outbound network denied
+#   LHAI_LEASE        command prefix that serializes heavy jobs on a shared machine
+LHAI_OFFLINE_RUN ?=
+LHAI_LEASE ?=
 
 .PHONY: setup models test test-model lint serve demo offline-check up down bench report sim
 
@@ -25,8 +29,9 @@ serve:
 demo:  ## offline: server + REST/SSE/WebSocket client round trip, no network needed
 	HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PORT=$(PORT) scripts/smoke.sh
 
-offline-check:  ## the demo plus egress canaries, with outbound network denied for the whole tree
-	$(TOOLS)/offline-run scripts/offline_check.sh
+offline-check:  ## the demo plus egress canaries; set LHAI_OFFLINE_RUN to a network-denying wrapper
+	@test -n "$(LHAI_OFFLINE_RUN)" || { echo "set LHAI_OFFLINE_RUN (e.g. a sandbox-exec wrapper)"; exit 2; }
+	$(LHAI_OFFLINE_RUN) scripts/offline_check.sh
 
 up:
 	docker compose -p lhai up --build -d
@@ -34,8 +39,8 @@ up:
 down:
 	docker compose -p lhai down
 
-bench:  ## every measurement in bench/RESULTS.md (takes the shared compute lease)
-	$(TOOLS)/compute_lease.py run localhost-ai-bench -- bench/all.sh
+bench:  ## every measurement in bench/RESULTS.md (prefix with LHAI_LEASE on a shared machine)
+	$(LHAI_LEASE) bench/all.sh
 	$(MAKE) report
 
 report:

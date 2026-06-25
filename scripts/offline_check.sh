@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Meant to run under .tools/offline-run (sandbox-exec, outbound network denied except
-# localhost). Checks the pinned files, proves the server process itself can't reach out, and
+# Meant to run under a wrapper that denies outbound network except localhost (on macOS a
+# sandbox-exec profile; `make offline-check LHAI_OFFLINE_RUN=...`). Checks the pinned files, proves the server process itself can't reach out, and
 # runs the demo round trip.
 set -euo pipefail
 cd "$(dirname "$0")/.."

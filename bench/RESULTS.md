@@ -10,7 +10,7 @@ Model `smollm2-135m` (HuggingFaceTB/SmolLM2-135M-Instruct), max_tokens 128, 45 s
 
 Memory probe before the run: limit 3.27 GiB, headroom 0.92 (mps(min(recommended_max, used+os_available))). Host swap: total = 13312.00M  used = 12288.25M  free = 1023.75M  (encrypted). Warnings: MPS memory limit is only 3.27 GiB; other processes are holding unified memory
 
-Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1; power: Now drawing from 'AC Power'; lease holder: localhost-ai-bench; containers running at record time: leasing-edge-1, leasing-postgres-1, leasing-mailpit-1, creative-ai-local-postgres-1
+Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'
 
 | controller | clients | req/s | output tok/s | TTFT p50 / p95 (ms) | request TPOT p50 / p95 (ms) | SLO attainment | errors | host CPU idle before |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -47,7 +47,7 @@ Model `smollm2-135m` (HuggingFaceTB/SmolLM2-135M-Instruct), max_tokens 128, 45 s
 
 Memory probe before the run: limit 4.00 GiB, headroom 0.72 (cgroup.memory). Host swap: total = 17408.00M  used = 16993.56M  free = 414.44M  (encrypted).
 
-Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1; power: Now drawing from 'AC Power'; lease holder: localhost-ai-bench; containers running at record time: lhai-edge-1, lhai-server-1, lhai-prometheus-1, lhai-grafana-1, summerand-api-demo-1, summerand-pipeline-demo-1, summerand-postgres-1, summerand-redpanda-1, leasing-edge-1, leasing-postgres-1, leasing-mailpit-1, creative-ai-local-postgres-1
+Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'
 
 These numbers are rough. Other agents' containers and builds shared the Docker VM and the host during this sweep (host CPU idle before each point ranged 35-69%; see `manifest` in `bench/results/cpu-docker.json`). The single-client baseline used for calibration was measured under that load, so the calibrated SLO (1883.2 ms) is loose and every point meets it: this sweep shows throughput scaling with batch size on CPU, not the controller's SLO behaviour.
 
@@ -86,6 +86,12 @@ Not measured. This machine has no NVIDIA GPU. The CUDA probe, the cu126 image an
 
 ## Memory pressure (CPU, Docker)
 
+### After the KV-ceiling fix
+
+Not run yet.
+
+### Before the KV-ceiling fix (history)
+
 Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 90 s, SLO set loose (1000 ms) so only memory matters. The server is recreated before each mode.
 
 | controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s |
@@ -96,6 +102,6 @@ Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 90 s, SL
 - fixed:32: batch limit 32-32, running rows at most 9, headroom 9%-25%, non-hold telemetry samples none, error kinds none.
 - aimd: batch limit 1-13, running rows at most 9, headroom 12%-25%, non-hold telemetry samples {'clamp': 22, 'increase': 18}, error kinds {'ReadTimeout': 12}.
 
-![memory pressure](figures/mempressure.png)
+![memory pressure](figures/mempressure_before_fix.png)
 
-Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1; power: Now drawing from 'AC Power'; lease holder: localhost-ai-bench; containers running at record time: summerand-api-demo-1, summerand-pipeline-demo-1, summerand-postgres-1, summerand-redpanda-1, leasing-edge-1, leasing-postgres-1, leasing-mailpit-1, creative-ai-local-postgres-1
+Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'

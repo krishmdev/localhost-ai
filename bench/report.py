@@ -36,11 +36,9 @@ def fmt(v, nd=1, suffix=""):
 
 def host_line(m: dict) -> str:
     h = m.get("host", {})
-    lease = m.get("compute_lease", {})
-    others = [line.split("\t")[0] for line in m.get("docker_ps", []) if line]
-    return (f"{h.get('chip')}, {h.get('ram_gb')} GB, {h.get('os')}; power: {h.get('power')}; "
-            f"lease holder: {lease.get('holder') or lease.get('holder_env')}; "
-            f"containers running at record time: {', '.join(others) or 'none'}")
+    parts = [h.get("chip") or h.get("machine"), f"{h.get('ram_gb')} GB" if h.get("ram_gb")
+             else None, h.get("os"), f"power: {h['power']}" if h.get("power") else None]
+    return ", ".join(p for p in parts if p)
 
 
 def sweep_table(d: dict) -> list[str]:

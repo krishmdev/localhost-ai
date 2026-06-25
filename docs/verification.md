@@ -42,7 +42,8 @@ arm64). This project calls no paid APIs and uses no keys.
     rows.
   - aimd completed 28 requests with 12 read timeouts. Its KV ceiling clamped L to 1-2.
   - The expected "fixed OOMs, AIMD survives" result did not happen. See the README limitations.
-- **Offline check** (`make offline-check`, under `.tools/offline-run`):
+- **Offline check** (`make offline-check`, with `LHAI_OFFLINE_RUN` set to a
+  sandbox-exec wrapper that denies outbound network except localhost):
   - `models verify` passed.
   - The egress canary was blocked (EPERM) in the CLI process and inside the running server
     (`/v1/admin/egress`).

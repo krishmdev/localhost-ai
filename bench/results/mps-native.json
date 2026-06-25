@@ -10,7 +10,7 @@
     "warmup": 5.0,
     "settle": 2.0,
     "max_tokens": 128,
-    "prompts": "/Users/krish/Developer/portfolio/localhost-ai/bench/prompts.jsonl",
+    "prompts": "prompts.jsonl",
     "slo_tpot_ms": null,
     "calibrate_slo": 3.0,
     "request_timeout": 300.0,

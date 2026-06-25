@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Every measurement in RESULTS.md, in one go. Run it under the compute lease:
-#   ../.tools/compute_lease.py run localhost-ai-bench -- bench/all.sh
+# Every measurement in RESULTS.md, in one go. On a shared machine, run it under whatever
+# serializes heavy jobs there (`make bench LHAI_LEASE="..."`).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 docker ps --format '{{.Names}}' | grep -q '^lhai-' && { echo "lhai stack already up"; exit 1; }

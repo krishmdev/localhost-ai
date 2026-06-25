@@ -7,7 +7,6 @@ docs/results/sim.json with the acceptance numbers, and plot seed 0 of S1-S5 to d
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -140,12 +139,11 @@ def main() -> None:
         if "L_after_oom" in rows[0]:
             agg[key]["oom_halved_all_seeds"] = all(
                 x["L_after_oom"] <= x["L_before_oom"] // 2 for x in rows)
-    manifest = subprocess.run(
-        [sys.executable, str(ROOT.parent / ".tools" / "run_manifest.py"), "kind=simulator"],
-        capture_output=True, text=True)
+    sys.path.insert(0, str(ROOT / "bench"))
+    import loadgen
+
     out = {"seeds": len(SEEDS), "warmup_intervals": WARMUP, "summary": agg,
-           "scenarios": results,
-           "manifest": json.loads(manifest.stdout) if manifest.returncode == 0 else None}
+           "scenarios": results, "manifest": loadgen.manifest(None, {"kind": "simulator"})}
     (ROOT / "docs" / "results").mkdir(parents=True, exist_ok=True)
     (ROOT / "docs" / "figures").mkdir(parents=True, exist_ok=True)
     (ROOT / "docs" / "results" / "sim.json").write_text(json.dumps(out, indent=1) + "\n")
