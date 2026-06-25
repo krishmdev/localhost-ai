@@ -293,3 +293,22 @@ def test_prefill_time_does_not_drag_the_limit():
     after = [L for t, L in limits if t > 30]
     lo, hi = math.floor(0.8 * 32) - 1, 32 + math.ceil(32 / 10) + 1
     assert after and all(lo <= L <= hi for L in after), (min(after), max(after))
+
+
+def test_kv_ceiling_does_not_undercut_admission():
+    # Before the fix, the ceiling assumed every row was as long as the longest recent request
+    # (prompt + half its max_tokens), so one long request in a batch of short ones clamped L
+    # far below what the admission budget had just allowed.
+    probe = FakeProbe(limit=1_000_000, used=100_000)  # ~750 tokens of KV at 1000 B/token
+    ctl = AIMDController(AIMDConfig(initial=16, max_batch=64))
+    s = make(runner=FakeRunner(), controller=ctl, probe=probe, control_interval_s=0.0)
+    s.add(req([1] * 40, SamplingParams(temperature=0.0, max_tokens=400)))
+    for i in range(10):
+        s.add(req([i % 30 + 1] * 5, SamplingParams(temperature=0.0, max_tokens=20)))
+    s.step()
+    admitted = len(s.running)
+    assert admitted == 11  # the admission budget fits all of them
+    s.step()  # control tick with the mixed batch running
+    assert s.kv_ceiling is not None and s.kv_ceiling >= admitted
+    assert ctl.limit >= admitted
+    assert ctl.last.action != "clamp"

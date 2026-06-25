@@ -1409,17 +1409,17 @@
     }
   },
   "manifest": {
-    "recorded_at": "2026-09-23T07:29:11-0400",
+    "recorded_at": "2026-09-23T17:17:50-0400",
     "host": {
       "chip": "Apple M1 Pro",
       "ram_gb": 16.0,
       "os": "Darwin 26.5.1",
       "python": "3.11.13",
-      "power": "Now drawing from 'AC Power'"
+      "power": "Now drawing from 'Battery Power'"
     },
     "compute_lease": {
       "held": true,
-      "holder": "localhost-ai-bench"
+      "holder": "planetary-fabric"
     },
     "extra": {
       "kind": "simulator"

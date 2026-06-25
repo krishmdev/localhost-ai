@@ -173,6 +173,11 @@ def sim_markdown(results: dict, agg: dict) -> str:
     b = results["S1"]["b_star"]
     lo, hi = results["S1"]["band"]
     s6_ok = agg["S6"]["oom_halved_all_seeds"]
+    s2_ok = (s2["min_in_band"] >= .95 and s2["seeds_L_ge_0_64_b_star"] == n
+             and s2["max_slo_violation_frac"] <= .1)
+    s3_verdict = "yes" if s3["seeds_L_ge_half_b_star"] == n else (
+        ("violations yes" if s3["max_slo_violation_frac"] <= .2 else "violations no")
+        + ", floor no (reported, not tuned)")
     rows = [
         f"Generated from `docs/results/sim.json` ({n} seeds, {WARMUP}-interval warm-up, "
         f"b* = {b}, band [{lo}, {hi}]).",
@@ -184,11 +189,11 @@ def sim_markdown(results: dict, agg: dict) -> str:
         f"| S2 5% noise | band >= 95%, L >= 0.64 b*, violations <= 10% | "
         f"{pct(s2['min_in_band'])} in band, L min {s2['min_L']} "
         f"({s2['min_L_over_b_star']} b*), violations {pct(s2['max_slo_violation_frac'])} | "
-        f"{'yes' if s2['min_in_band'] >= .95 and s2['seeds_L_ge_0_64_b_star'] == n and s2['max_slo_violation_frac'] <= .1 else 'no'} |",
+        f"{'yes' if s2_ok else 'no'} |",
         f"| S3 15% noise | violations <= 20%, L >= 0.5 b* | violations "
         f"{pct(s3['max_slo_violation_frac'])}; L >= 0.5 b* on {s3['seeds_L_ge_half_b_star']}/{n}"
         f" seeds, worst {s3['min_L']} ({s3['min_L_over_b_star']} b*) | "
-        f"{'yes' if s3['seeds_L_ge_half_b_star'] == n and s3['max_slo_violation_frac'] <= .2 else 'violations yes, floor no (reported, not tuned)'} |",
+        f"{s3_verdict} |",
         f"| S4 b* halves | back in new band within 6 intervals | "
         f"{s4['max_intervals_to_new_band']} intervals | "
         f"{'yes' if s4['max_intervals_to_new_band'] <= 6 else 'no'} |",

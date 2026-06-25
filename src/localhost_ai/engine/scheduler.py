@@ -83,7 +83,6 @@ class Scheduler:
 
         self.mem: MemSnapshot | None = probe.snapshot() if probe else None
         self._last_tick = clock()
-        self._recent_len: deque[int] = deque(maxlen=64)
         self.busy_s = 0.0
         self.busy_ratio = 0.0
         self._busy_at_tick = 0.0
@@ -185,10 +184,21 @@ class Scheduler:
 
     @property
     def est_seq_len(self) -> int:
-        """Optimistic per-row KV length: prompt + half of max_tokens, over recent and queued
-        requests. When it's wrong, recompute preemption catches the OOM."""
-        queued = [r.num_prompt + r.params.max_tokens // 2 for r in list(self.waiting)[:64]]
-        return max([*self._recent_len, *queued], default=256)
+        """Per-row KV length the ceiling divides by, estimated the same way admission projects
+        a join: the padded length of the batch plus the requests admission would take next,
+        plus half of those rows' remaining max_tokens on average. The batch is left-padded, so every
+        row costs the padded length. When the estimate is wrong, recompute preemption catches
+        the OOM."""
+        cur = self.kv_tokens // len(self.running) if self.running else 0
+        room = max(1, self.controller.limit - len(self.running))
+        with self._lock:
+            nxt = list(self.waiting)[:room]  # the requests admission would take next
+        width = max([cur, *(len(r.all_ids) for r in nxt)])
+        rows = list(self.running) + nxt
+        if not rows:
+            return 256
+        growth = sum(max(1, r.remaining // 2) for r in rows) / len(rows)
+        return max(1, int(width + growth))
 
     def _trim_stats(self, now: float) -> None:
         horizon = now - self.cfg.stats_window_s
@@ -254,7 +264,6 @@ class Scheduler:
         for r in new:
             if r.admitted_at is None:
                 r.admitted_at = now
-                self._recent_len.append(r.num_prompt + r.params.max_tokens // 2)
             if r.detok is None:
                 r.detok = IncrementalDetokenizer(self.tokenizer, r.params.stop)
                 r.generator = make_generator(r.params.seed)
