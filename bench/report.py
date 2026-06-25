@@ -136,7 +136,7 @@ def plot_trace(d: dict, label: str) -> str | None:
     return name
 
 
-def plot_mem(d: dict) -> str:
+def plot_mem(d: dict, name: str = "mempressure.png", title: str = "") -> str:
     fig, ax = plt.subplots(figsize=(8, 3.4))
     for r in d["runs"]:
         tr = r.get("trace") or []
@@ -152,9 +152,8 @@ def plot_mem(d: dict) -> str:
     ax.set_ylabel("container memory (GiB)")
     ax.set_xlabel("seconds into the run")
     ax.legend(frameon=False, fontsize=9, loc="lower right")
-    ax.set_title("Memory pressure: same load, two controllers", loc="left")
+    ax.set_title("Memory pressure: same load, two controllers" + title, loc="left")
     fig.tight_layout()
-    name = "mempressure.png"
     fig.savefig(FIG / name, dpi=150)
     plt.close(fig)
     return name
@@ -219,11 +218,16 @@ def main() -> None:
         out.append("")
     out += ["## NVIDIA CUDA", "", "Not measured. This machine has no NVIDIA GPU. The CUDA "
             "probe, the cu126 image and `docker-compose.gpu.yml` are untested.", ""]
-    mp = load("cpu-mempressure")
     out += ["## Memory pressure (CPU, Docker)", ""]
-    if mp is None:
-        out += ["Not run yet.", ""]
-    else:
+    for key, heading, fig in (
+            ("cpu-mempressure", "After the KV-ceiling fix", "mempressure.png"),
+            ("cpu-mempressure-before-ceiling-fix", "Before the KV-ceiling fix (history)",
+             "mempressure_before_fix.png")):
+        mp = load(key)
+        out += [f"### {heading}", ""]
+        if mp is None:
+            out += ["Not run yet.", ""]
+            continue
         c = mp["config"]
         out += [f"Server container limited to {c['mem_limit']} (cgroup), {c['concurrency']} "
                 f"clients, max_tokens {c['max_tokens']}, {c['duration']:.0f} s, SLO set loose "
@@ -252,7 +256,8 @@ def main() -> None:
             out.append(f"- {r['mode']}: batch limit {min(ls)}-{max(ls)}, running rows at most "
                        f"{max(rn)}, headroom {min(hr):.0%}-{max(hr):.0%}, non-hold telemetry "
                        f"samples {acts or 'none'}, error kinds {r['error_kinds'] or 'none'}.")
-        out += ["", f"![memory pressure](figures/{plot_mem(mp)})", "",
+        png = plot_mem(mp, fig, f" ({heading.lower()})")
+        out += ["", f"![memory pressure](figures/{png})", "",
                 f"Host: {host_line(mp['manifest'])}", ""]
     (HERE / "RESULTS.md").write_text("\n".join(out))
     traces = [f"![AIMD trace, {TARGET_NAMES[lbl]}](../bench/figures/aimd_trace_{lbl}.png)"
@@ -319,7 +324,8 @@ def readme_summary() -> list[str]:
         rows.append(line + ".")
     mp = load("cpu-mempressure")
     if mp:
-        rows += ["", f"Memory pressure (CPU container capped at {mp['config']['mem_limit']}, "
+        rows += ["", f"Memory pressure after the KV-ceiling fix (CPU container capped at "
+                 f"{mp['config']['mem_limit']}, "
                  f"{mp['config']['concurrency']} clients, {mp['config']['max_tokens']} tokens "
                  "each):", ""]
         for r in mp["runs"]:
