@@ -88,7 +88,19 @@ Not measured. This machine has no NVIDIA GPU. The CUDA probe, the cu126 image an
 
 ### After the KV-ceiling fix
 
-Not run yet.
+Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 60 s, SLO set loose (1000 ms) so only memory matters. The server is recreated before each mode.
+
+| controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s |
+|---|---:|---:|---|---:|---:|
+| fixed:32 | 38 | 0 | running (exit 0) | 1.33 GiB | 22 |
+| aimd | 28 | 9 | running (exit 0) | 1.33 GiB | 11 |
+
+- fixed:32: batch limit 32-32, running rows at most 9, headroom 9%-26%, non-hold telemetry samples none, error kinds none.
+- aimd: batch limit 1-11, running rows at most 8, headroom 9%-24%, non-hold telemetry samples {'clamp': 17, 'mem_decrease': 1, 'increase': 17}, error kinds {'ReadTimeout': 9}.
+
+![memory pressure](figures/mempressure.png)
+
+Host: arm64, macOS-26.5.1
 
 ### Before the KV-ceiling fix (history)
 

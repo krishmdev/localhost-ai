@@ -155,6 +155,11 @@ treat absolute numbers as rough.
 
 - Apple GPU (MPS), native, 64 clients: most throughput from `fixed:32` (207 tok/s, 3% SLO attainment); `aimd` 151 tok/s at 93% attainment, L between 14 and 18 during the run.
 - CPU, Docker (linux/arm64 VM; contended shared host, rough), 64 clients: most throughput from `fixed:32` (6 tok/s, 100% SLO attainment); `aimd` 6 tok/s at 100% attainment, L between 16 and 16 during the run.
+
+Memory pressure after the KV-ceiling fix (CPU container capped at 1500m, 32 clients, 512 tokens each):
+
+- fixed:32: running, 38 requests completed, 0 failed.
+- aimd: running, 28 requests completed, 9 failed.
 <!-- results:end -->
 
 Grafana dashboard during the Docker sweep:
@@ -211,13 +216,18 @@ Models are pinned in `models.yaml` (repo and commit) and hashed in `models.lock`
 - The controller holds decode-step latency, not end-to-end latency. TTFT grows with queueing
   when the batch is capped.
 - Benchmarks ran on a shared machine; see the manifests.
-- The memory-pressure run did not show what the plan hoped for. With a 1.5 GB container limit
-  neither mode was OOM-killed, because the scheduler's KV admission budget applies in fixed mode
-  too and kept fixed:32 to a handful of rows. AIMD did worse than fixed. Its KV ceiling
-  estimates every row at the longest recent request (prompt + half of max_tokens), which is
-  stricter than the per-request admission check, so L was clamped down to 1-2. Twelve AIMD
-  requests then timed out in the queue. Making the ceiling use the same per-request estimate as
-  admission is the obvious next fix, but it hasn't been re-measured.
+- The memory-pressure scenario does not show an AIMD advantage, before or after fixing the KV
+  ceiling. With a 1.5 GB container limit neither mode was OOM-killed: the KV admission budget
+  applies in fixed mode too and kept fixed:32 to 9 or fewer rows. The first run found a real bug
+  (the ceiling assumed every row was as long as the longest recent request). After the fix
+  (the ceiling now uses the same per-request estimate as admission, with a unit test), AIMD still
+  did worse: 28 completed and 9 timed out, against 38 and 0 for fixed:32. The reason is the
+  watermarks. The model and runtime alone use most of a 1.5 GB container, so headroom sits
+  at 9-26%, often under the 20% needed to grow L. The early clamp to L = 1 then held, and AIMD
+  admitted one request at a time while its batch drained. At this size, fixed:32 with the
+  admission budget is the better choice. Watermarks defined relative to memory above the model's
+  baseline would likely help, but that's untested. The earlier claim that fixed:32 gets
+  OOM-killed is dropped.
 
 ## Layout
 

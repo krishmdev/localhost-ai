@@ -50,3 +50,16 @@ arm64). This project calls no paid APIs and uses no keys.
   - A REST completion and a WebSocket generation both worked offline.
   - Companion check, unsandboxed: `lhai egress-check --expect open` connects to all three
     targets.
+
+## 2026-09-24
+
+- **KV-ceiling fix**: the ceiling now estimates rows the way admission does (padded batch length
+  plus the requests admission would take next, plus half of their remaining max_tokens).
+  `test_kv_ceiling_does_not_undercut_admission` fails on the old code and passes now.
+- **Memory pressure re-run after the fix** (`bench/results/cpu-mempressure.json`, 1.5 GB cgroup,
+  32 clients, 512 tokens, 60 s per mode, under the lease): neither mode was OOM-killed.
+  fixed:32 completed 38 requests with 0 errors. aimd completed 28 with 9 read timeouts; L fell to
+  1 in the first seconds and stayed low because headroom sat under the 20% high watermark. The
+  pre-fix run is kept as `cpu-mempressure-before-ceiling-fix.json`. No AIMD advantage here.
+- **Manifests scrubbed** with `scripts/scrub_manifests.py`: process lists, container names,
+  lease command and local paths removed from every committed results file.
