@@ -180,6 +180,17 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
     deadline = t_origin + args.warmup + args.duration
     measure_from = t_origin + args.warmup
 
+    counter: dict[str, float] = {}
+
+    async def mark(name: str, at: float) -> None:
+        await asyncio.sleep(max(0.0, at - time.perf_counter()))
+        # if the server is down (e.g. OOM-killed), fall back to client-side counts below
+        with contextlib.suppress(httpx.HTTPError, RuntimeError):
+            counter[name] = await generated_tokens(url)
+        counter[name + "_t"] = time.perf_counter()
+
+    marks = [asyncio.create_task(mark("start", measure_from)),
+             asyncio.create_task(mark("end", deadline))]
     async with httpx.AsyncClient(base_url=url, limits=limits, timeout=timeout) as client:
         async def worker(wid: int) -> None:
             while time.perf_counter() < deadline:
@@ -192,16 +203,18 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
                     await asyncio.sleep(0.2)
 
         await asyncio.gather(*(worker(i) for i in range(conc)))
+    await asyncio.gather(*marks)
     stop_tel.set()
     with contextlib.suppress(Exception):
         await asyncio.wait_for(tel, 5)
 
-    # count requests that started after warmup and finished before the deadline (plus the
-    # tail that finished within one request timeout after it, so long requests aren't dropped)
-    window = [r for r in results if r.start >= measure_from]
+    # Throughput counts every token the server generated inside [measure_from, deadline], from
+    # its own lhai_generated_tokens_total counter, whichever request it belonged to. Request
+    # statistics use requests that finished inside that window.
+    span = max(1e-9, counter["end_t"] - counter["start_t"])
+    window = [r for r in results if measure_from <= r.end <= deadline]
     ok = [r for r in window if r.ok]
     errs = [r for r in window if not r.ok]
-    span = max(1e-9, max((r.end for r in window), default=deadline) - measure_from)
     tpots = [r.tpot for r in ok if r.tpot is not None]
     kinds: dict[str, int] = {}
     for r in errs:
@@ -211,7 +224,8 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
         mode=mode, concurrency=conc, duration_s=round(span, 2), slo_tpot_ms=slo_ms,
         completed=len(ok), errors=len(errs), rejected_429=kinds.get("http_429", 0),
         req_per_s=round(len(ok) / span, 3),
-        out_tok_per_s=round(sum(r.tokens for r in ok) / span, 2),
+        out_tok_per_s=round(((counter["end"] - counter["start"]) if "start" in counter
+                             and "end" in counter else sum(r.tokens for r in ok)) / span, 2),
         ttft_p50_ms=ms(pct([r.ttft for r in ok if r.ttft is not None], 0.5)),
         ttft_p95_ms=ms(pct([r.ttft for r in ok if r.ttft is not None], 0.95)),
         req_tpot_p50_ms=ms(pct(tpots, 0.5)), req_tpot_p95_ms=ms(pct(tpots, 0.95)),
@@ -246,6 +260,15 @@ async def preflight(url: str, token: str) -> dict:
     for w in out["warnings"]:
         print(f"preflight warning: {w}", file=sys.stderr)
     return out
+
+
+async def generated_tokens(url: str) -> float:
+    async with httpx.AsyncClient(base_url=url, timeout=10) as c:
+        text = (await c.get("/metrics/")).text
+    for line in text.splitlines():
+        if line.startswith("lhai_generated_tokens_total "):
+            return float(line.split()[1])
+    raise RuntimeError("lhai_generated_tokens_total not found in /metrics")
 
 
 async def server_ready(url: str, timeout: float = 3.0) -> bool:
