@@ -1,8 +1,8 @@
 """Batch-limit controllers.
 
 `AIMDController` adapts the integer batch limit L once per control interval from three signals:
-p95 time-per-output-token (TPOT) against an SLO, live memory headroom, and OOM events. The update
-rule, in priority order:
+p95 decode-step time against a per-token (TPOT) SLO, live memory headroom, and OOM events.
+The update rule, in priority order:
 
 1. OOM (never gated, applied the moment it's reported, at most once per interval):
    L <- max(Lmin, L // 2), new epoch, 3 intervals of no increases.
@@ -15,10 +15,10 @@ rule, in priority order:
 7. Otherwise (p95 in the [0.9 SLO, SLO] deadband): hold.
 8. Clamp L to [Lmin, min(Lmax, KV ceiling)]. A clamp only stops admissions; it never preempts.
 
-Fresh evidence: every TPOT sample is tagged with the epoch it was measured in, and only samples
-from the current epoch, measured while the running batch was within the current limit, count.
-Any change of L starts a new epoch and clears the window. Without this, one slow sample left in a
-5 s window keeps triggering decreases after the batch has already shrunk (the stale-window
+Fresh evidence: every decode-step sample is tagged with the epoch it was measured in, and only
+samples from the current epoch, measured while the running batch was within the current limit,
+count. Any change of L starts a new epoch and clears the window. Without this, one slow sample
+left in a 5 s window keeps triggering decreases after the batch has already shrunk (the stale-window
 cascade), because each decrease would be judged on latency measured at the old, larger batch.
 
 What it converges to depends on noise. With b* the largest batch whose latency meets the SLO:
@@ -228,8 +228,13 @@ class AIMDController(_Decisions):
             return d
 
     def _fresh(self, now: float) -> list[Sample]:
+        # The window is the last window_s seconds, but never fewer than n_min samples of the
+        # current epoch: when a decode step takes longer than window_s / n_min (300 ms steps
+        # on a slow CPU), a pure time window would never hold enough evidence to act on.
+        # Every sample here is already from the current epoch, so older ones are still valid.
         horizon = now - self.cfg.window_s
-        while self._window and self._window[0].t < horizon:
+        while (self._window and self._window[0].t < horizon
+               and len(self._window) > self.cfg.n_min):
             self._window.popleft()
         return [s for s in self._window if s.batch <= self._limit]
 
@@ -269,18 +274,19 @@ class AIMDController(_Decisions):
         elif p > c.slo_tpot_s:
             new = max(c.min_batch, math.floor(c.decrease * before))
             action = "slo_decrease"
-            reason = f"p95 TPOT {p * 1e3:.1f} ms > SLO {c.slo_tpot_s * 1e3:.0f} ms"
+            reason = f"p95 decode step {p * 1e3:.1f} ms > SLO {c.slo_tpot_s * 1e3:.0f} ms"
         elif cooling:
             action, reason = "hold", "increase cooldown after OOM"
         elif (p < c.deadband * c.slo_tpot_s and (hr is None or hr > c.mem_high_wm)
               and obs.queued > 0 and obs.running >= before):
             new = before + max(1, math.floor(c.increase_frac * before))
             action = "increase"
-            reason = f"p95 TPOT {p * 1e3:.1f} ms < {c.deadband:.0%} of SLO and batch saturated"
+            reason = (f"p95 decode step {p * 1e3:.1f} ms < {c.deadband:.0%} of SLO, "
+                      "batch saturated")
         else:
             action = "hold"
             if p >= c.deadband * c.slo_tpot_s:
-                reason = f"p95 TPOT {p * 1e3:.1f} ms in deadband"
+                reason = f"p95 decode step {p * 1e3:.1f} ms in deadband"
             elif hr is not None and hr <= c.mem_high_wm:
                 reason = f"headroom {hr:.1%} <= high watermark"
             else:

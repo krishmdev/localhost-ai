@@ -9,7 +9,7 @@
             {"type": "error", "id", "message", "code"}
 
 `/v1/ws/telemetry` pushes one engine snapshot per control interval (device memory, batch
-limit, running/queued, p95 TPOT, tokens/s, the controller's last decision) and accepts
+limit, running/queued, p95 decode step, tokens/s, the controller's last decision) and accepts
 {"type": "set_slo", "tpot_ms"} and {"type": "set_mode", "mode", "batch"} when the admin token
 matches (`?token=...`; no token configured means local-dev mode, controls open)."""
 

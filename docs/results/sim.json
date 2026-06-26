@@ -1409,7 +1409,7 @@
   }
  },
  "manifest": {
-  "recorded_at": "2026-09-23T17:25:12-0400",
+  "recorded_at": "2026-09-24T14:45:40-0400",
   "host": {
    "machine": "arm64",
    "os": "macOS-26.5.1",
@@ -1420,7 +1420,7 @@
    "torch": "2.14.0",
    "transformers": "5.17.0"
   },
-  "load_1m": 100.7,
+  "load_1m": 5.4,
   "extra": {
    "kind": "simulator"
   }

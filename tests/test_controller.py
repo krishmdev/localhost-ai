@@ -253,3 +253,17 @@ def test_s6_oom_halves_next_interval(seed):
     t = sc.oom_at
     assert tr.limit[t] <= tr.limit[t - 1] // 2
     _always(tr)
+
+
+def test_slow_steps_still_produce_decisions():
+    # 300 ms decode steps: only ~16 fit in the 5 s window, fewer than n_min = 20. The window
+    # keeps the last n_min samples of the epoch, so the controller still acts.
+    ctl = make(initial=16)
+    t, actions = 0.0, []
+    for second in range(1, 30):
+        while t + 0.3 <= second:
+            t += 0.3
+            ctl.observe(Sample(t=t, tpot_s=0.3, epoch=ctl.epoch, batch=ctl.limit))
+        actions.append(tick(ctl, float(second)).action)
+    assert "slo_decrease" in actions  # 300 ms > the 50 ms SLO
+    assert ctl.limit < 16
