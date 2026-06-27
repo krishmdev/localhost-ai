@@ -61,6 +61,12 @@ def sweep_table(d: dict) -> list[str]:
     return rows
 
 
+def describe_range(vals: list[int]) -> str:
+    if not vals:
+        return "no trace"
+    return f"stayed at {vals[0]}" if len(set(vals)) == 1 else f"{min(vals)} to {max(vals)}"
+
+
 def best(d: dict, mode: str, key: str) -> dict | None:
     rs = [r for r in d["runs"] if r.get("mode") == mode and not r.get("skipped")]
     return max(rs, key=lambda r: r[key]) if rs else None
@@ -194,14 +200,17 @@ def main() -> None:
         if label == "cpu-docker":
             idles = [r["host_cpu_idle_before"] for r in d["runs"]
                      if r.get("host_cpu_idle_before") is not None]
-            out += [f"These numbers are rough. Other agents' containers and builds shared the "
-                    f"Docker VM and the host during this sweep (host CPU idle before each point "
-                    f"ranged {min(idles):.0f}-{max(idles):.0f}%; see `manifest` in "
-                    f"`bench/results/cpu-docker.json`). The single-client baseline used for "
-                    f"calibration was measured under that load, so the calibrated SLO "
-                    f"({d['slo_tpot_ms']} ms) is loose and every point meets it: this sweep "
-                    "shows throughput scaling with batch size on CPU, not the controller's SLO "
-                    "behaviour.", ""]
+            ok = [r for r in d["runs"] if not r.get("skipped")]
+            meets = sum((r["slo_attainment"] or 0) >= 0.99 for r in ok)
+            aimd_ls = {p["batch_limit"] for r in ok if r["mode"] == "aimd"
+                       for p in r.get("trace", []) if p.get("batch_limit") is not None}
+            out += ["These numbers are rough. Other workloads were running on the machine and "
+                    "in the Docker VM during this sweep (host CPU idle before each point ranged "
+                    f"{min(idles):.0f}-{max(idles):.0f}%). The single-client baseline used for "
+                    "calibration was measured under that load, which sets the SLO "
+                    f"({d['slo_tpot_ms']} ms); {meets} of {len(ok)} points meet it for 99%+ of "
+                    f"requests. Across the AIMD runs the batch limit took {len(aimd_ls)} "
+                    f"distinct value(s): {describe_range(sorted(aimd_ls))}.", ""]
         out += sweep_table(d)
         out += ["", f"![{label} sweep](figures/{plot_sweep(d, label)})", ""]
         tr = plot_trace(d, label)
@@ -227,6 +236,8 @@ def main() -> None:
             out += ["Not run yet.", ""]
             continue
         c = mp["config"]
+        out += ["Throughput in this section is the older client-side count (tokens of requests "
+                "that started after the warm-up), not the server counter used above.", ""]
         out += [f"Server container limited to {c['mem_limit']} (cgroup), {c['concurrency']} "
                 f"clients, max_tokens {c['max_tokens']}, {c['duration']:.0f} s, SLO set loose "
                 f"({c['slo_tpot_ms']:.0f} ms) so only memory matters. The server is recreated "
@@ -235,10 +246,10 @@ def main() -> None:
                 "by the probe | output tok/s |", "|---|---:|---:|---|---:|---:|"]
         for r in mp["runs"]:
             st = r["container"]
-            state = ("OOM-killed" if st.get("oom_killed") else st.get("status", "?"))
+            state = "OOM-killed" if st.get("oom_killed") else "not OOM-killed"
             peak = r.get("peak_mem_used_bytes")
             out.append(f"| {r['mode']} | {r['completed']} | {r['errors']} | {state} "
-                       f"(exit {st.get('exit_code')}) | "
+                       "| "
                        f"{fmt(None if peak is None else peak / 2**30, 2, ' GiB')} | "
                        f"{r['out_tok_per_s']:.0f} |")
         out.append("")
@@ -251,7 +262,7 @@ def main() -> None:
             for p in tr:
                 if p.get("action") and p["action"] != "hold":
                     acts[p["action"]] = acts.get(p["action"], 0) + 1
-            out.append(f"- {r['mode']}: batch limit {min(ls)}-{max(ls)}, running rows at most "
+            out.append(f"- {r['mode']}: batch limit {describe_range(ls)}, running rows at most "
                        f"{max(rn)}, headroom {min(hr):.0%}-{max(hr):.0%}, non-hold telemetry "
                        f"samples {acts or 'none'}, error kinds {r['error_kinds'] or 'none'}.")
         png = plot_mem(mp, fig, f" ({heading.lower()})")
@@ -276,63 +287,48 @@ def write_section(path: Path, name: str, body: str) -> None:
 
 
 def readme_summary() -> list[str]:
-    """Short results table for the README: the busiest point per controller and target."""
-    rows = ["| target | controller | clients | output tok/s | request TPOT p95 | SLO | "
-            "SLO attainment | TTFT p95 |", "|---|---|---:|---:|---:|---:|---:|---:|"]
-    for label in ("mps-native", "cpu-docker"):
-        d = load(label)
-        if d is None:
-            continue
+    """Headline for the README: the Apple GPU sweep at its highest concurrency. The contended
+    CPU sweep stays in RESULTS.md only."""
+    rows = []
+    d = load("mps-native")
+    if d is not None:
         top = max(r["concurrency"] for r in d["runs"] if not r.get("skipped"))
+        rows += [f"{TARGET_NAMES['mps-native']}, {top} clients, SLO {d['slo_tpot_ms']} ms per "
+                 "token:", "",
+                 "| controller | output tok/s | requests completed | request TPOT p95 | "
+                 "SLO attainment* | TTFT p95 |", "|---|---:|---:|---:|---:|---:|"]
+        at = {r["mode"]: r for r in d["runs"]
+              if r.get("concurrency") == top and not r.get("skipped")}
         for mode in ("fixed:1", "fixed:32", "aimd"):
-            r = next((r for r in d["runs"] if r.get("mode") == mode
-                      and r.get("concurrency") == top and not r.get("skipped")), None)
+            r = at.get(mode)
             if r is None:
                 continue
             att = "n/a" if r["slo_attainment"] is None else f"{r['slo_attainment']:.0%}"
-            rows.append(f"| {TARGET_NAMES[label]} | {mode} | {top} | {r['out_tok_per_s']:.0f} | "
-                        f"{fmt(r['req_tpot_p95_ms'])} ms | {d['slo_tpot_ms']} ms | {att} | "
+            rows.append(f"| {mode} | {r['out_tok_per_s']:.0f} | {r['completed']} | "
+                        f"{fmt(r['req_tpot_p95_ms'])} ms | {att} | "
                         f"{fmt(r['ttft_p95_ms'] / 1e3 if r['ttft_p95_ms'] else None, 1)} s |")
-    rows.append("| NVIDIA CUDA | any | | not measured | | | | |")
-    rows.append("")
-    for label in ("mps-native", "cpu-docker"):
-        d = load(label)
-        if d is None:
-            continue
-        top = max(r["concurrency"] for r in d["runs"] if not r.get("skipped"))
-        at = {r["mode"]: r for r in d["runs"]
-              if r.get("concurrency") == top and not r.get("skipped")}
-        if not at:
-            continue
-        fastest = max(at.values(), key=lambda r: r["out_tok_per_s"])
-        steadiest = max(at.values(), key=lambda r: (r["slo_attainment"] or 0,
-                                                    r["out_tok_per_s"]))
-        line = (f"- {TARGET_NAMES[label]}, {top} clients: most throughput from "
-                f"`{fastest['mode']}` ({fastest['out_tok_per_s']:.0f} tok/s, "
-                f"{(fastest['slo_attainment'] or 0):.0%} SLO attainment); ")
         a = at.get("aimd")
         if a:
-            ls = [p["batch_limit"] for p in a.get("trace", [])
-                  if p.get("batch_limit") is not None]
-            line += (f"`aimd` {a['out_tok_per_s']:.0f} tok/s at "
-                     f"{(a['slo_attainment'] or 0):.0%} attainment, L between "
-                     f"{min(ls)} and {max(ls)} during the run")
-        else:
-            line += f"best attainment `{steadiest['mode']}`"
-        rows.append(line + ".")
+            ls = sorted({p["batch_limit"] for p in a.get("trace", [])
+                         if p.get("batch_limit") is not None})
+            rows += ["", f"AIMD's batch limit during that run: {describe_range(ls)}."]
+        rows += ["", "*Share of completed requests whose per-token latency (TPOT) met the SLO. It "
+                 "ignores time to first token, which grows with queueing when the batch is "
+                 "capped; that's the TTFT column. Throughput is the server's generated-token "
+                 "count over the measurement window."]
+    rows += ["", "NVIDIA CUDA: not measured (no NVIDIA GPU here). The Docker CPU sweep ran on a "
+             "contended host; its rough numbers are in RESULTS.md only."]
     mp = load("cpu-mempressure")
     if mp:
         rows += ["", f"Memory pressure after the KV-ceiling fix (CPU container capped at "
-                 f"{mp['config']['mem_limit']}, "
-                 f"{mp['config']['concurrency']} clients, {mp['config']['max_tokens']} tokens "
-                 "each):", ""]
+                 f"{mp['config']['mem_limit']}, {mp['config']['concurrency']} clients, "
+                 f"{mp['config']['max_tokens']} tokens each):", ""]
         for r in mp["runs"]:
             st = r["container"]
-            outcome = "OOM-killed by the kernel" if st.get("oom_killed") else st.get("status")
+            outcome = "OOM-killed by the kernel" if st.get("oom_killed") else "not OOM-killed"
             rows.append(f"- {r['mode']}: {outcome}, "
                         f"{r['completed']} requests completed, {r['errors']} failed.")
     return rows
-
 
 if __name__ == "__main__":
     main()
