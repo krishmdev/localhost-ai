@@ -52,6 +52,7 @@ class Service:
     loader: Callable[[str], ModelParts] | None = None
     engine: AsyncEngine = field(init=False)
     swapping: bool = False
+    _swap_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._aimd = aimd_config(self.settings)
@@ -83,9 +84,15 @@ class Service:
         self.engine.stop()
 
     async def swap_model(self, name: str, drain_timeout_s: float = 120.0) -> None:
-        """Drain, unload, load, resume. New requests get 503 while this runs."""
+        """Drain, unload, load, resume. New requests get 503 while this runs. If the new model
+        fails to load, the old one is loaded back and serving resumes with it. Swaps are
+        serialized."""
         if self.loader is None:
             raise RuntimeError("model hot-swap is not available in this configuration")
+        async with self._swap_lock:
+            await self._swap(name, drain_timeout_s)
+
+    async def _swap(self, name: str, drain_timeout_s: float) -> None:
         self.swapping = True
         try:
             waited = 0.0
@@ -95,13 +102,18 @@ class Service:
             controller = self.engine.controller
             self.engine.stop()
             self.engine.scheduler.fail_all("model is being replaced")
-            old = self.parts
+            old_name = self.parts.name
             self.parts = None  # type: ignore[assignment]
-            del old
             _free_device_cache()
-            self.parts = await asyncio.to_thread(self.loader, name)
-            self.engine = self._build_engine(controller)
-            self.engine.start()
+            try:
+                self.parts = await asyncio.to_thread(self.loader, name)
+            except Exception:
+                log.exception("loading %s failed; reloading %s", name, old_name)
+                self.parts = await asyncio.to_thread(self.loader, old_name)
+                raise
+            finally:
+                self.engine = self._build_engine(controller)
+                self.engine.start()
             log.info("now serving %s", name)
         finally:
             self.swapping = False

@@ -28,7 +28,6 @@ class Settings(BaseSettings):
     min_batch: int = Field(1, ge=1)
     max_batch: int = Field(64, ge=1)
     slo_tpot_ms: float = Field(100.0, gt=0)
-    slo_ttft_ms: float = Field(2000.0, gt=0)
     control_interval_s: float = Field(1.0, gt=0)
     window_s: float = Field(5.0, gt=0)
     n_min: int = Field(20, ge=1)

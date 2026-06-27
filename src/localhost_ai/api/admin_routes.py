@@ -81,5 +81,9 @@ async def egress(expect: str = "blocked", svc: Service = Depends(require_admin))
 async def load_model(body: ModelLoad, svc: Service = Depends(require_admin)) -> dict:
     if body.model not in svc.model_names:
         raise HTTPException(404, f"unknown model {body.model!r}; known: {svc.model_names}")
-    await svc.swap_model(body.model)
+    try:
+        await svc.swap_model(body.model)
+    except Exception as exc:  # noqa: BLE001 - report it; the old model is serving again
+        raise HTTPException(500, f"loading {body.model!r} failed ({exc}); still serving "
+                                 f"{svc.model_name}") from exc
     return {"model": svc.model_name, "info": svc.parts.info}

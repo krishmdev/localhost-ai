@@ -130,3 +130,22 @@ def test_egress_route_reports_blocked_and_open(monkeypatch):
         assert c.get("/v1/admin/egress?expect=open").status_code == 409
         monkeypatch.setattr(egress, "probe", lambda timeout: {"1.1.1.1:443": "open"})
         assert c.get("/v1/admin/egress").status_code == 409
+
+
+def test_failed_model_swap_keeps_serving():
+    svc = fake_service()
+    good = svc.parts
+    svc.model_names = ["fake-model", "broken"]
+
+    def loader(name):
+        if name == "broken":
+            raise OSError("weights missing")
+        return good
+
+    svc.loader = loader
+    with TestClient(create_app(svc)) as c:
+        r = c.post("/v1/admin/models/load", json={"model": "broken"})
+        assert r.status_code == 500 and "still serving fake-model" in r.json()["error"]["message"]
+        assert c.get("/readyz").status_code == 200
+        r = c.post("/v1/chat/completions", json={"messages": MSG, "max_tokens": 3})
+        assert r.status_code == 200

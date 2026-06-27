@@ -127,7 +127,8 @@ class CpuProbe:
 
 class BudgetProbe:
     """Pretend the server may only use `budget` bytes: used = this process's RSS plus whatever
-    the wrapped device probe reports as device-allocated (MPS/CUDA)."""
+    the wrapped device probe reports as device-allocated (MPS/CUDA). On Apple silicon, Metal
+    allocations can also show up in RSS, so this may double-count; treat it as a rough cap."""
 
     def __init__(self, inner: MemoryProbe, budget: int) -> None:
         self.name = f"{inner.name}+budget"

@@ -19,7 +19,9 @@ import asyncio
 import contextlib
 import hmac
 import json
+import math
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -32,6 +34,22 @@ from .openai_routes import sampling_params, submit, timings, usage
 from .schemas import ChatCompletionRequest
 
 router = APIRouter()
+
+
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
+
+
+def origin_ok(svc: Service, ws: WebSocket) -> bool:
+    """Browsers send an Origin header on WebSocket handshakes and CORS doesn't apply to them, so
+    without a token any web page could drive this server. With no admin token configured, only
+    local origins (or non-browser clients, which send no Origin) are accepted."""
+    if svc.settings.admin_token:
+        return True
+    origin = ws.headers.get("origin")
+    if not origin:
+        return True
+    host = urlsplit(origin).hostname or ""
+    return host in LOCAL_HOSTS or f"[{host}]" in LOCAL_HOSTS
 
 
 def token_ok(svc: Service, supplied: str | None) -> bool:
@@ -54,6 +72,9 @@ class _Conn:
 @router.websocket("/v1/ws/generate")
 async def ws_generate(ws: WebSocket) -> None:
     svc: Service = ws.app.state.svc
+    if not origin_ok(svc, ws):
+        await ws.close(code=1008)
+        return
     await ws.accept()
     conn = _Conn(ws)
     handles: dict[str, Handle] = {}
@@ -84,6 +105,9 @@ async def ws_generate(ws: WebSocket) -> None:
                 msg = json.loads(await ws.receive_text())
             except json.JSONDecodeError:
                 await conn.send({"type": "error", "id": None, "message": "invalid JSON"})
+                continue
+            if not isinstance(msg, dict):
+                await conn.send({"type": "error", "id": None, "message": "expected an object"})
                 continue
             kind, rid = msg.get("type"), str(msg.get("id", ""))
             if kind == "cancel":
@@ -135,11 +159,18 @@ async def ws_generate(ws: WebSocket) -> None:
 @router.websocket("/v1/ws/telemetry")
 async def ws_telemetry(ws: WebSocket) -> None:
     svc: Service = ws.app.state.svc
+    if not origin_ok(svc, ws):
+        await ws.close(code=1008)
+        return
+    try:
+        period = float(ws.query_params.get("interval", svc.settings.control_interval_s))
+    except ValueError:
+        await ws.close(code=1008, reason="interval must be a number")
+        return
+    period = min(max(period, 0.1), 10.0) if math.isfinite(period) else 1.0
     await ws.accept()
     conn = _Conn(ws)
     can_control = token_ok(svc, ws.query_params.get("token"))
-    period = float(ws.query_params.get("interval", svc.settings.control_interval_s))
-    period = min(max(period, 0.1), 10.0)
 
     async def push() -> None:
         while True:
@@ -155,6 +186,9 @@ async def ws_telemetry(ws: WebSocket) -> None:
             except json.JSONDecodeError:
                 await conn.send({"type": "error", "message": "invalid JSON"})
                 continue
+            if not isinstance(msg, dict):
+                await conn.send({"type": "error", "message": "expected an object"})
+                continue
             kind = msg.get("type")
             if kind not in ("set_slo", "set_mode"):
                 await conn.send({"type": "error", "message": f"unknown message type {kind!r}"})
@@ -166,8 +200,8 @@ async def ws_telemetry(ws: WebSocket) -> None:
             try:
                 if kind == "set_slo":
                     tpot = float(msg["tpot_ms"])
-                    if tpot <= 0:
-                        raise ValueError("tpot_ms must be > 0")
+                    if not math.isfinite(tpot) or tpot <= 0:
+                        raise ValueError("tpot_ms must be a finite number > 0")
                     svc.engine.set_slo(tpot)
                     svc.metrics.slo.set(tpot / 1e3)
                     await conn.send({"type": "ack", "for": kind, "slo_tpot_ms": tpot})

@@ -76,17 +76,6 @@ def select_rows(cache: DynamicCache, mask: torch.Tensor,
     return cache, mask[:, drop:]
 
 
-def trim_left(cache: DynamicCache, mask: torch.Tensor) -> tuple[DynamicCache, torch.Tensor]:
-    real_cols = mask.sum(dim=0).nonzero()
-    drop = int(real_cols[0]) if real_cols.numel() else mask.shape[1]
-    if drop == 0:
-        return cache, mask
-    for layer in cache.layers:
-        layer.keys = layer.keys[:, :, drop:]
-        layer.values = layer.values[:, :, drop:]
-    return cache, mask[:, drop:]
-
-
 def crop(cache: DynamicCache, length: int) -> None:
     """Undo a partially applied forward pass (e.g. OOM in layer 17 of 30): every layer that
     already appended the new step is cut back to `length`."""

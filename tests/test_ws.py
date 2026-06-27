@@ -117,3 +117,33 @@ def test_unknown_ws_path():
     with (TestClient(create_app(fake_service())) as c, pytest.raises(WebSocketDisconnect),
           c.websocket_connect("/v1/ws/nope") as ws):
         ws.receive_json()
+
+
+def test_foreign_origin_rejected_without_token():
+    with TestClient(create_app(fake_service())) as c:
+        with pytest.raises(WebSocketDisconnect), \
+                c.websocket_connect("/v1/ws/generate",
+                                    headers={"origin": "https://evil.example"}) as ws:
+            ws.receive_json()
+        with c.websocket_connect("/v1/ws/telemetry",
+                                 headers={"origin": "http://localhost:3000"}) as ws:
+            assert ws.receive_json()["type"] == "telemetry"
+
+
+def test_bad_frames_and_params_do_not_kill_the_socket():
+    with TestClient(create_app(fake_service())) as c:
+        with c.websocket_connect("/v1/ws/generate") as ws:
+            ws.send_text("[1, 2]")
+            assert ws.receive_json()["message"] == "expected an object"
+            ws.send_json(gen("ok", 2))
+            _, done = collect(ws, 1)
+            assert done["ok"]["type"] == "done"
+        with c.websocket_connect("/v1/ws/telemetry") as ws:
+            ws.send_json({"type": "set_slo", "tpot_ms": float("inf")})
+            m = ws.receive_json()
+            while m["type"] == "telemetry":
+                m = ws.receive_json()
+            assert m["type"] == "error"
+        with pytest.raises(WebSocketDisconnect), \
+                c.websocket_connect("/v1/ws/telemetry?interval=abc") as ws:
+            ws.receive_json()
