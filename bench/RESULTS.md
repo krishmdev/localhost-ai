@@ -6,40 +6,40 @@ Method: `bench/loadgen.py` runs a closed loop of N streaming clients for a fixed
 
 ## Apple GPU (MPS), native
 
-Model `smollm2-135m` (HuggingFaceTB/SmolLM2-135M-Instruct), max_tokens 128, 45 s per point after 5 s warm-up. SLO 71.9 ms = 3.0 x 23.98 ms single-client median.
+Model `smollm2-135m` (HuggingFaceTB/SmolLM2-135M-Instruct), max_tokens 128, 45 s per point after 5 s warm-up. SLO 70.5 ms = 3.0 x 23.5 ms single-client median.
 
-Memory probe before the run: limit 3.27 GiB, headroom 0.92 (mps(min(recommended_max, used+os_available))). Host swap: total = 13312.00M  used = 12288.25M  free = 1023.75M  (encrypted). Warnings: MPS memory limit is only 3.27 GiB; other processes are holding unified memory
+Memory probe before the run: limit 3.08 GiB, headroom 0.92 (mps(min(recommended_max, used+os_available))). Host swap: total = 8192.00M  used = 7866.38M  free = 325.62M  (encrypted). Warnings: MPS memory limit is only 3.08 GiB; other processes are holding unified memory
 
-Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'
+Host: arm64, macOS-26.5.1
 
 | controller | clients | req/s | output tok/s | TTFT p50 / p95 (ms) | request TPOT p50 / p95 (ms) | SLO attainment | errors | host CPU idle before |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| fixed:1 | 1 | 0.40 | 41 | 36 / 41 | 23.8 / 24.4 | 100% | 0 | 55% |
-| fixed:1 | 4 | 0.33 | 33 | 9327 / 9493 | 24.3 / 24.6 | 100% | 0 | 62% |
-| fixed:1 | 8 | 0.32 | 32 | 15621 / 18535 | 23.6 / 24.1 | 100% | 0 | 58% |
-| fixed:1 | 16 | 0.28 | 20 | 25436 / 36056 | 23.0 / 23.6 | 100% | 0 | 73% |
-| fixed:1 | 32 | 0.17 | 18 | 67294 / 70945 | 23.5 / 23.7 | 100% | 0 | 70% |
-| fixed:1 | 64 | 0.11 | 10 | 143210 / 147479 | 23.4 / 23.8 | 100% | 0 | 68% |
-| fixed:32 | 1 | 0.48 | 42 | 37 / 44 | 23.5 / 23.8 | 100% | 0 | 67% |
-| fixed:32 | 4 | 1.03 | 101 | 71 / 154 | 36.9 / 40.2 | 100% | 0 | 67% |
-| fixed:32 | 8 | 1.50 | 148 | 78 / 162 | 47.5 / 51.1 | 100% | 0 | 67% |
-| fixed:32 | 16 | 1.94 | 183 | 100 / 482 | 72.1 / 78.9 | 48% | 0 | 65% |
-| fixed:32 | 32 | 2.47 | 233 | 142 / 360 | 107.9 / 117.0 | 1% | 0 | 67% |
-| fixed:32 | 64 | 2.18 | 207 | 9851 / 11462 | 103.9 / 110.3 | 3% | 0 | 67% |
-| aimd | 1 | 0.51 | 41 | 41 / 51 | 23.6 / 24.2 | 100% | 0 | 84% |
-| aimd | 4 | 1.17 | 103 | 73 / 87 | 35.8 / 37.7 | 100% | 0 | 84% |
-| aimd | 8 | 1.50 | 156 | 79 / 188 | 45.1 / 46.8 | 100% | 0 | 81% |
-| aimd | 16 | 1.95 | 190 | 107 / 1817 | 67.7 / 71.7 | 95% | 0 | 82% |
-| aimd | 32 | 1.87 | 171 | 7155 / 8448 | 66.5 / 75.7 | 82% | 0 | 85% |
-| aimd | 64 | 1.59 | 151 | 19566 / 21641 | 67.8 / 72.5 | 93% | 0 | 82% |
+| fixed:1 | 1 | 0.33 | 38 | 44 / 91 | 24.1 / 33.1 | 100% | 0 | 46% |
+| fixed:1 | 4 | 0.40 | 44 | 8703 / 8969 | 22.5 / 23.2 | 100% | 0 | 81% |
+| fixed:1 | 8 | 0.56 | 44 | 11072 / 17051 | 22.2 / 23.1 | 100% | 0 | 73% |
+| fixed:1 | 16 | 0.44 | 41 | 27125 / 37641 | 23.9 / 25.3 | 100% | 0 | 76% |
+| fixed:1 | 32 | 0.49 | 42 | 25549 / 46893 | 23.6 / 25.5 | 100% | 0 | 79% |
+| fixed:1 | 64 | 0.44 | 44 | 23697 / 40485 | 22.4 / 23.4 | 100% | 0 | 73% |
+| fixed:32 | 1 | 0.44 | 39 | 40 / 65 | 25.1 / 27.0 | 100% | 0 | 75% |
+| fixed:32 | 4 | 1.07 | 105 | 81 / 312 | 37.4 / 43.4 | 100% | 0 | 67% |
+| fixed:32 | 8 | 1.73 | 171 | 82 / 570 | 45.8 / 50.4 | 100% | 0 | 54% |
+| fixed:32 | 16 | 2.36 | 229 | 111 / 701 | 68.8 / 78.9 | 69% | 0 | 69% |
+| fixed:32 | 32 | 3.22 | 327 | 161 / 448 | 96.0 / 101.0 | 0% | 0 | 81% |
+| fixed:32 | 64 | 3.42 | 339 | 8514 / 12352 | 93.6 / 100.6 | 1% | 0 | 83% |
+| aimd | 1 | 0.56 | 44 | 35 / 45 | 22.0 / 23.4 | 100% | 0 | 80% |
+| aimd | 4 | 1.38 | 120 | 66 / 110 | 32.5 / 35.4 | 100% | 0 | 84% |
+| aimd | 8 | 1.80 | 186 | 77 / 229 | 42.5 / 45.1 | 100% | 0 | 82% |
+| aimd | 16 | 2.11 | 215 | 905 / 3899 | 60.5 / 68.0 | 99% | 0 | 93% |
+| aimd | 32 | 2.38 | 226 | 7620 / 10055 | 60.4 / 68.3 | 95% | 0 | 83% |
+| aimd | 64 | 2.13 | 213 | 21055 / 25524 | 60.8 / 70.4 | 95% | 0 | 78% |
 
 ![mps-native sweep](figures/sweep_mps-native.png)
 
 ![mps-native AIMD trace](figures/aimd_trace_mps-native.png)
 
-- fixed:1: peak 41 tok/s at 1 clients, SLO attainment 100% there.
-- fixed:32: peak 233 tok/s at 32 clients, SLO attainment 1% there.
-- aimd: peak 190 tok/s at 16 clients, SLO attainment 95% there.
+- fixed:1: peak 44 tok/s at 8 clients, SLO attainment 100% there.
+- fixed:32: peak 339 tok/s at 64 clients, SLO attainment 1% there.
+- aimd: peak 226 tok/s at 32 clients, SLO attainment 95% there.
 
 ## CPU, Docker (linux/arm64 VM; contended shared host, rough)
 
@@ -49,7 +49,7 @@ Memory probe before the run: limit 4.00 GiB, headroom 0.72 (cgroup.memory). Host
 
 Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'
 
-These numbers are rough. Other agents' containers and builds shared the Docker VM and the host during this sweep (host CPU idle before each point ranged 35-69%; see `manifest` in `bench/results/cpu-docker.json`). The single-client baseline used for calibration was measured under that load, so the calibrated SLO (1883.2 ms) is loose and every point meets it: this sweep shows throughput scaling with batch size on CPU, not the controller's SLO behaviour.
+These numbers are rough. Other workloads were running on the machine and in the Docker VM during this sweep (host CPU idle before each point ranged 35-69%). The single-client baseline used for calibration was measured under that load, which sets the SLO (1883.2 ms); 18 of 18 points meet it for 99%+ of requests. Across the AIMD runs the batch limit took 2 distinct value(s): 16 to 17.
 
 | controller | clients | req/s | output tok/s | TTFT p50 / p95 (ms) | request TPOT p50 / p95 (ms) | SLO attainment | errors | host CPU idle before |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -88,15 +88,17 @@ Not measured. This machine has no NVIDIA GPU. The CUDA probe, the cu126 image an
 
 ### After the KV-ceiling fix
 
+Throughput in this section is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
+
 Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 60 s, SLO set loose (1000 ms) so only memory matters. The server is recreated before each mode.
 
 | controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s |
 |---|---:|---:|---|---:|---:|
-| fixed:32 | 38 | 0 | running (exit 0) | 1.33 GiB | 22 |
-| aimd | 28 | 9 | running (exit 0) | 1.33 GiB | 11 |
+| fixed:32 | 38 | 0 | not OOM-killed | 1.33 GiB | 22 |
+| aimd | 28 | 9 | not OOM-killed | 1.33 GiB | 11 |
 
-- fixed:32: batch limit 32-32, running rows at most 9, headroom 9%-26%, non-hold telemetry samples none, error kinds none.
-- aimd: batch limit 1-11, running rows at most 8, headroom 9%-24%, non-hold telemetry samples {'clamp': 17, 'mem_decrease': 1, 'increase': 17}, error kinds {'ReadTimeout': 9}.
+- fixed:32: batch limit stayed at 32, running rows at most 9, headroom 9%-26%, non-hold telemetry samples none, error kinds none.
+- aimd: batch limit 1 to 11, running rows at most 8, headroom 9%-24%, non-hold telemetry samples {'clamp': 17, 'mem_decrease': 1, 'increase': 17}, error kinds {'ReadTimeout': 9}.
 
 ![memory pressure](figures/mempressure.png)
 
@@ -104,15 +106,17 @@ Host: arm64, macOS-26.5.1
 
 ### Before the KV-ceiling fix (history)
 
+Throughput in this section is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
+
 Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 90 s, SLO set loose (1000 ms) so only memory matters. The server is recreated before each mode.
 
 | controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s |
 |---|---:|---:|---|---:|---:|
-| fixed:32 | 41 | 0 | running (exit 0) | 1.33 GiB | 20 |
-| aimd | 28 | 12 | running (exit 0) | 1.29 GiB | 11 |
+| fixed:32 | 41 | 0 | not OOM-killed | 1.33 GiB | 20 |
+| aimd | 28 | 12 | not OOM-killed | 1.29 GiB | 11 |
 
-- fixed:32: batch limit 32-32, running rows at most 9, headroom 9%-25%, non-hold telemetry samples none, error kinds none.
-- aimd: batch limit 1-13, running rows at most 9, headroom 12%-25%, non-hold telemetry samples {'clamp': 22, 'increase': 18}, error kinds {'ReadTimeout': 12}.
+- fixed:32: batch limit stayed at 32, running rows at most 9, headroom 9%-25%, non-hold telemetry samples none, error kinds none.
+- aimd: batch limit 1 to 13, running rows at most 9, headroom 12%-25%, non-hold telemetry samples {'clamp': 22, 'increase': 18}, error kinds {'ReadTimeout': 12}.
 
 ![memory pressure](figures/mempressure_before_fix.png)
 

@@ -375,7 +375,8 @@ async def main_async(args) -> dict:
     return {
         "label": args.label,
         "started": started,
-        "config": {k: v for k, v in vars(args).items() if k not in ("admin_token",)},
+        "config": {k: (Path(v).name if k in ("prompts", "manifest") and v else v)
+                   for k, v in vars(args).items() if k not in ("admin_token",)},
         "model": models["data"][0],
         "slo_tpot_ms": slo,
         "calibration": calibration,

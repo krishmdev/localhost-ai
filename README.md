@@ -150,23 +150,24 @@ running on the machine during these runs (CPU idle before each point is in the t
 absolute numbers as rough.
 
 <!-- results:begin -->
-| target | controller | clients | output tok/s | request TPOT p95 | SLO | SLO attainment | TTFT p95 |
-|---|---|---:|---:|---:|---:|---:|---:|
-| Apple GPU (MPS), native | fixed:1 | 64 | 10 | 23.8 ms | 71.9 ms | 100% | 147.5 s |
-| Apple GPU (MPS), native | fixed:32 | 64 | 207 | 110.3 ms | 71.9 ms | 3% | 11.5 s |
-| Apple GPU (MPS), native | aimd | 64 | 151 | 72.5 ms | 71.9 ms | 93% | 21.6 s |
-| CPU, Docker (linux/arm64 VM; contended shared host, rough) | fixed:1 | 64 | 0 | 183.4 ms | 1883.2 ms | 100% | 284.2 s |
-| CPU, Docker (linux/arm64 VM; contended shared host, rough) | fixed:32 | 64 | 6 | 713.1 ms | 1883.2 ms | 100% | 87.2 s |
-| CPU, Docker (linux/arm64 VM; contended shared host, rough) | aimd | 64 | 6 | 434.5 ms | 1883.2 ms | 100% | 130.7 s |
-| NVIDIA CUDA | any | | not measured | | | | |
+Apple GPU (MPS), native, 64 clients, SLO 70.5 ms per token:
 
-- Apple GPU (MPS), native, 64 clients: most throughput from `fixed:32` (207 tok/s, 3% SLO attainment); `aimd` 151 tok/s at 93% attainment, L between 14 and 18 during the run.
-- CPU, Docker (linux/arm64 VM; contended shared host, rough), 64 clients: most throughput from `fixed:32` (6 tok/s, 100% SLO attainment); `aimd` 6 tok/s at 100% attainment, L between 16 and 16 during the run.
+| controller | output tok/s | requests completed | request TPOT p95 | SLO attainment* | TTFT p95 |
+|---|---:|---:|---:|---:|---:|
+| fixed:1 | 44 | 20 | 23.4 ms | 100% | 40.5 s |
+| fixed:32 | 339 | 154 | 100.6 ms | 1% | 12.4 s |
+| aimd | 213 | 96 | 70.4 ms | 95% | 25.5 s |
+
+AIMD's batch limit during that run: 8 to 17.
+
+*Share of completed requests whose per-token latency (TPOT) met the SLO. It ignores time to first token, which grows with queueing when the batch is capped; that's the TTFT column. Throughput is the server's generated-token count over the measurement window.
+
+NVIDIA CUDA: not measured (no NVIDIA GPU here). The Docker CPU sweep ran on a contended host; its rough numbers are in RESULTS.md only.
 
 Memory pressure after the KV-ceiling fix (CPU container capped at 1500m, 32 clients, 512 tokens each):
 
-- fixed:32: running, 38 requests completed, 0 failed.
-- aimd: running, 28 requests completed, 9 failed.
+- fixed:32: not OOM-killed, 38 requests completed, 0 failed.
+- aimd: not OOM-killed, 28 requests completed, 9 failed.
 <!-- results:end -->
 
 Grafana dashboard during the Docker sweep:
