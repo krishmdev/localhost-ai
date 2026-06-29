@@ -13,7 +13,10 @@ The update rule, in priority order:
 6. Fresh p95 < 0.9 SLO, headroom above the high watermark and the batch saturated
    (queue > 0 and running >= L): L <- L + max(1, L // 10), new epoch.
 7. Otherwise (p95 in the [0.9 SLO, SLO] deadband): hold.
-8. Clamp L to [Lmin, min(Lmax, KV ceiling)]. A clamp only stops admissions; it never preempts.
+8. Clamp growth to [Lmin, min(Lmax, KV ceiling)]. When the ceiling estimate falls below rows
+   that are already running, L is left where it was (admission still checks its own KV
+   budget); explicit SLO and memory decreases keep their chosen targets. A clamp never
+   preempts.
 
 Fresh evidence: every decode-step sample is tagged with the epoch it was measured in, and only
 samples from the current epoch, measured while the running batch was within the current limit,
@@ -293,6 +296,18 @@ class AIMDController(_Decisions):
                 reason = "batch not saturated"
 
         ceiling = c.max_batch if obs.kv_ceiling is None else min(c.max_batch, obs.kv_ceiling)
+        if action in ("hold", "increase"):
+            if ceiling < obs.running:
+                # These rows were already admitted. A transient headroom reading or a
+                # conservative row-length estimate must not cut L below them, invalidate their
+                # decode samples, and then ratchet L down as they finish one by one. Admission
+                # still checks every join against the KV budget, and real memory pressure is
+                # handled by the low-watermark rule, which sheds.
+                ceiling = max(ceiling, before)
+        else:
+            # An explicit SLO or low-memory decrease keeps its selected target; a speculative
+            # ceiling must not turn a 20% cut into a much larger one.
+            ceiling = max(ceiling, new)
         clamped = min(max(new, c.min_batch), max(c.min_batch, ceiling))
         if clamped != new and action in ("hold", "increase"):
             action = "clamp"

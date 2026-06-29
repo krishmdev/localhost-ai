@@ -329,3 +329,35 @@ def test_kv_ceiling_does_not_undercut_admission():
     assert s.kv_ceiling is not None and s.kv_ceiling >= admitted
     assert ctl.limit >= admitted
     assert ctl.last.action != "clamp"
+
+
+def test_transient_low_headroom_preserves_limit_but_gates_new_admission():
+    probe = FakeProbe(limit=1_000_000, used=100_000)
+    ctl = AIMDController(AIMDConfig(initial=11, max_batch=16))
+    s = make(runner=FakeRunner(), controller=ctl, probe=probe, control_interval_s=0.0)
+    running = [req([i + 1] * 5, SamplingParams(temperature=0.0, max_tokens=40))
+               for i in range(8)]
+    waiting = req([20] * 5, SamplingParams(temperature=0.0, max_tokens=40))
+    for r in running:
+        s.add(r)
+    s.step()
+    s.add(waiting)
+    assert len(s.running) == 8 and s.queue_depth == 1
+
+    # Headroom is below the reserve but above the emergency watermark. The predictive
+    # ceiling conflicts with eight safely running rows, and the per-request admission
+    # budget still blocks the ninth.
+    probe.used = 882_000
+    s.step()
+    assert s.kv_ceiling is not None and s.kv_ceiling < 8
+    assert ctl.limit == 11 and ctl.last.action == "hold" and not ctl.last.shed
+    assert s.queue_depth == 1 and waiting.admitted_at is None
+
+    # A fresh favorable snapshot permits the queued request without waiting for all eight
+    # rows to drain. The same path still enforces the prefill and KV budgets.
+    probe.used = 100_000
+    s.step()
+    assert waiting.admitted_at is not None and len(s.running) == 9
+    drain(s)
+    for r in [*running, waiting]:
+        assert isinstance(done(r), DoneEvent)

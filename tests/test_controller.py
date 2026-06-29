@@ -121,15 +121,45 @@ def test_memory_low_watermark_decreases_and_sheds():
 
 def test_clamped_to_kv_ceiling_and_bounds():
     ctl = make(min_batch=2, max_batch=24)
-    d = tick(ctl, 0.5, ceiling=7)
+    d = tick(ctl, 0.5, running=0, ceiling=7)
     assert ctl.limit == 7 and d.action == "clamp" and not d.shed  # clamps never preempt
-    tick(ctl, 0.7, ceiling=0)
+    tick(ctl, 0.7, running=0, ceiling=0)
     assert ctl.limit == 2
     feed(ctl, 3.0, 0.001)
     for now in range(3, 40):
         feed(ctl, float(now), 0.001)
         tick(ctl, float(now))
     assert ctl.limit == 24
+
+
+def test_kv_clamp_keeps_limit_while_active_rows_drain():
+    # A ceiling estimate below the rows already running must not ratchet L down as they
+    # finish; headroom (11.8%) is above the low watermark, so this isn't a memory emergency.
+    ctl = make(initial=11)
+    narrow = MemSnapshot(used=882, limit=1000, headroom=118)
+    for now, running in ((1.0, 8), (2.0, 7), (3.0, 6)):
+        d = tick(ctl, now, running=running, mem=narrow, ceiling=1)
+        assert d.action == "hold" and not d.shed and ctl.limit == 11
+    feed(ctl, 4.5, 0.01, batch=8)
+    d = tick(ctl, 4.5, running=8, mem=MEM_OK, ceiling=12)
+    assert d.action == "hold" and d.fresh >= ctl.cfg.n_min  # the epoch's evidence survived
+
+
+def test_kv_clamp_does_not_deepen_an_slo_cut():
+    ctl = make(initial=10)
+    feed(ctl, 1.5, 0.08, batch=10)
+    d = tick(ctl, 1.5, running=10, ceiling=1)
+    assert d.action == "slo_decrease" and ctl.limit == 8
+    feed(ctl, 2.5, 0.08, batch=10)  # still draining above the new limit: not fresh
+    d = tick(ctl, 2.5, running=10, ceiling=1)
+    assert d.action == "hold" and d.fresh == 0 and ctl.limit == 8
+
+
+def test_low_memory_still_sheds_despite_kv_ceiling():
+    ctl = make(initial=10)
+    low = MemSnapshot(used=950, limit=1000, headroom=50)
+    d = tick(ctl, 1.0, running=10, mem=low, ceiling=0)
+    assert d.action == "mem_decrease" and d.shed and ctl.limit == 8
 
 
 def test_fixed_mode_never_changes():
