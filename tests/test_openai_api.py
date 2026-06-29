@@ -23,8 +23,8 @@ async def sdk():
     svc = fake_service()
     app = create_app(svc)
     svc.start()
-    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
-    yield AsyncOpenAI(api_key="unused", base_url="http://test/v1", http_client=http)
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost")
+    yield AsyncOpenAI(api_key="unused", base_url="http://localhost/v1", http_client=http)
     await http.aclose()
     svc.stop()
 

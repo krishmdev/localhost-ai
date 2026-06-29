@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     default_max_tokens: int = 256
 
     admin_token: str = ""
+    # Host headers the server answers to (DNS-rebinding guard), comma-separated; "server" is
+    # the compose service name Prometheus scrapes, "testserver" is Starlette's test client.
+    allowed_hosts: str = "localhost,127.0.0.1,::1,server,testserver"
     host: str = "127.0.0.1"
     port: int = 8000
 

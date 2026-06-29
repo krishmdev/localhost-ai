@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from prometheus_client import make_asgi_app
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..service import Service
 from . import admin_routes, openai_routes, ws_routes
@@ -23,6 +24,9 @@ def create_app(svc: Service) -> FastAPI:
 
     app = FastAPI(title="localhost-ai", version="0.1.0", lifespan=lifespan)
     app.state.svc = svc
+    hosts = [h.strip() for h in svc.settings.allowed_hosts.split(",") if h.strip()]
+    if hosts and "*" not in hosts:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
     app.include_router(openai_routes.router)
     app.include_router(ws_routes.router)
     app.include_router(admin_routes.router)

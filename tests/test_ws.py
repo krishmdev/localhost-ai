@@ -147,3 +147,17 @@ def test_bad_frames_and_params_do_not_kill_the_socket():
         with pytest.raises(WebSocketDisconnect), \
                 c.websocket_connect("/v1/ws/telemetry?interval=abc") as ws:
             ws.receive_json()
+
+
+def test_foreign_origin_rejected_even_with_token():
+    with TestClient(create_app(fake_service(admin_token="tok"))) as c, \
+            pytest.raises(WebSocketDisconnect), \
+            c.websocket_connect("/v1/ws/telemetry?token=tok",
+                                headers={"origin": "https://evil.example"}) as ws:
+        ws.receive_json()
+
+
+def test_unknown_host_header_rejected():
+    with TestClient(create_app(fake_service())) as c:
+        assert c.get("/healthz", headers={"host": "attacker.example"}).status_code == 400
+        assert c.get("/healthz", headers={"host": "127.0.0.1:8000"}).status_code == 200

@@ -11,7 +11,8 @@
 `/v1/ws/telemetry` pushes one engine snapshot per control interval (device memory, batch
 limit, running/queued, p95 decode step, tokens/s, the controller's last decision) and accepts
 {"type": "set_slo", "tpot_ms"} and {"type": "set_mode", "mode", "batch"} when the admin token
-matches (`?token=...`; no token configured means local-dev mode, controls open)."""
+matches (`?token=...`; no token configured means local-dev mode, controls open). Both routes
+reject browser origins outside LHAI_ALLOWED_HOSTS."""
 
 from __future__ import annotations
 
@@ -36,20 +37,15 @@ from .schemas import ChatCompletionRequest
 router = APIRouter()
 
 
-LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
-
-
 def origin_ok(svc: Service, ws: WebSocket) -> bool:
     """Browsers send an Origin header on WebSocket handshakes and CORS doesn't apply to them, so
-    without a token any web page could drive this server. With no admin token configured, only
-    local origins (or non-browser clients, which send no Origin) are accepted."""
-    if svc.settings.admin_token:
-        return True
+    a web page could otherwise drive this server. Only non-browser clients (no Origin) and pages
+    served from an allowed host are accepted, whether or not an admin token is set."""
     origin = ws.headers.get("origin")
     if not origin:
         return True
-    host = urlsplit(origin).hostname or ""
-    return host in LOCAL_HOSTS or f"[{host}]" in LOCAL_HOSTS
+    allowed = {h.strip().strip("[]") for h in svc.settings.allowed_hosts.split(",") if h.strip()}
+    return "*" in allowed or (urlsplit(origin).hostname or "") in allowed
 
 
 def token_ok(svc: Service, supplied: str | None) -> bool:
