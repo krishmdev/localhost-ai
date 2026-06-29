@@ -64,6 +64,7 @@ class RunSummary:
     server_alive_after: bool
     host_load_1m: list = field(default_factory=list)  # [before, after] the point
     host_cpu_idle_before: float | None = None  # percent, from `top` (macOS hosts only)
+    tokens_source: str = "server"  # "server": /metrics counter delta; "client": fallback
     error_kinds: dict = field(default_factory=dict)
     trace: list = field(default_factory=list)
 
@@ -212,6 +213,7 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
     # its own lhai_generated_tokens_total counter, whichever request it belonged to. Request
     # statistics use requests that finished inside that window.
     span = max(1e-9, counter["end_t"] - counter["start_t"])
+    server_counted = "start" in counter and "end" in counter
     window = [r for r in results if measure_from <= r.end <= deadline]
     ok = [r for r in window if r.ok]
     errs = [r for r in window if not r.ok]
@@ -224,8 +226,9 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
         mode=mode, concurrency=conc, duration_s=round(span, 2), slo_tpot_ms=slo_ms,
         completed=len(ok), errors=len(errs), rejected_429=kinds.get("http_429", 0),
         req_per_s=round(len(ok) / span, 3),
-        out_tok_per_s=round(((counter["end"] - counter["start"]) if "start" in counter
-                             and "end" in counter else sum(r.tokens for r in ok)) / span, 2),
+        out_tok_per_s=round(((counter["end"] - counter["start"]) if server_counted
+                             else sum(r.tokens for r in ok)) / span, 2),
+        tokens_source="server" if server_counted else "client",
         ttft_p50_ms=ms(pct([r.ttft for r in ok if r.ttft is not None], 0.5)),
         ttft_p95_ms=ms(pct([r.ttft for r in ok if r.ttft is not None], 0.95)),
         req_tpot_p50_ms=ms(pct(tpots, 0.5)), req_tpot_p95_ms=ms(pct(tpots, 0.95)),

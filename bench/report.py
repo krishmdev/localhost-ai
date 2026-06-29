@@ -74,7 +74,8 @@ def best(d: dict, mode: str, key: str) -> dict | None:
 
 def plot_sweep(d: dict, label: str) -> str:
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.8))
-    for mode, color in plotstyle.MODE_COLORS.items():
+    for mode in plotstyle.modes_in(d["runs"]):
+        color = plotstyle.mode_color(mode)
         rs = [r for r in d["runs"] if r.get("mode") == mode and not r.get("skipped")]
         if not rs:
             continue
@@ -144,7 +145,7 @@ def plot_mem(d: dict, name: str = "mempressure.png", title: str = "") -> str:
     fig, ax = plt.subplots(figsize=(8, 3.4))
     for r in d["runs"]:
         tr = r.get("trace") or []
-        color = plotstyle.MODE_COLORS.get(r["mode"], plotstyle.INK2)
+        color = plotstyle.mode_color(r["mode"])
         ax.plot([p["t"] for p in tr], [(p["mem_used_bytes"] or 0) / 2**30 for p in tr],
                 color=color, lw=2, label=r["mode"] + (" (OOM-killed)" if r["container"].get(
                     "oom_killed") else ""))
@@ -201,28 +202,37 @@ def main() -> None:
             idles = [r["host_cpu_idle_before"] for r in d["runs"]
                      if r.get("host_cpu_idle_before") is not None]
             ok = [r for r in d["runs"] if not r.get("skipped")]
-            meets = sum((r["slo_attainment"] or 0) >= 0.99 for r in ok)
+            measured = [r for r in ok if r["slo_attainment"] is not None]
+            meets = sum(r["slo_attainment"] >= 0.99 for r in measured)
+            unmeasured = len(ok) - len(measured)
+            aimd_ok = all(r["slo_attainment"] >= 0.99 for r in measured if r["mode"] == "aimd")
             aimd_ls = {p["batch_limit"] for r in ok if r["mode"] == "aimd"
                        for p in r.get("trace", []) if p.get("batch_limit") is not None}
-            out += ["These numbers are rough. Other workloads were running on the machine and "
+            gap = (f" ({unmeasured} point(s) completed no request inside the window)"
+                   if unmeasured else "")
+            inert = (len(aimd_ls) == 1 and aimd_ok
+                     and max(r["concurrency"] for r in ok) <= min(aimd_ls))
+            text = ("These numbers are rough. Other workloads were running on the machine and "
                     "in the Docker VM during this sweep (host CPU idle before each point ranged "
                     f"{min(idles):.0f}-{max(idles):.0f}%). The single-client baseline used for "
                     "calibration was measured under that load, which sets the SLO "
-                    f"({d['slo_tpot_ms']} ms); {meets} of {len(ok)} points meet it for 99%+ of "
-                    f"requests. Across the AIMD runs the batch limit took {len(aimd_ls)} "
-                    f"distinct value(s): {describe_range(sorted(aimd_ls))}."
-                    + (" The sweep never had more clients than AIMD's starting limit, so its "
-                       "batch was never saturated and every point stayed under the SLO: there "
-                       "was nothing to adapt to, and AIMD behaved like a fixed batch here. This "
-                       "sweep is not evidence for or against the controller."
-                       if len(aimd_ls) == 1 and max(r["concurrency"] for r in ok)
-                       <= min(aimd_ls) else ""), ""]
+                    f"({d['slo_tpot_ms']} ms); {meets} of {len(measured)} points with completed "
+                    f"requests meet it for 99%+ of them{gap}. Across the AIMD runs the batch "
+                    f"limit took {len(aimd_ls)} distinct value(s): "
+                    f"{describe_range(sorted(aimd_ls))}.")
+            if inert:
+                text += (" The sweep never had more clients than AIMD's starting limit, so its "
+                         "batch was never saturated and every AIMD point stayed under the SLO: "
+                         "there was nothing to adapt to, and AIMD behaved like a fixed batch of "
+                         f"{min(aimd_ls)} here. This sweep is not evidence for or against the "
+                         "controller.")
+            out += [text, ""]
         out += sweep_table(d)
         out += ["", f"![{label} sweep](figures/{plot_sweep(d, label)})", ""]
         tr = plot_trace(d, label)
         if tr:
             out += [f"![{label} AIMD trace](figures/{tr})", ""]
-        for mode in ("fixed:1", "fixed:32", "aimd"):
+        for mode in plotstyle.modes_in(d["runs"]):
             b = best(d, mode, "out_tok_per_s")
             if b:
                 slo = "n/a" if b["slo_attainment"] is None else f"{b['slo_attainment']:.0%}"
@@ -317,7 +327,7 @@ def readme_summary() -> list[str]:
                  "SLO attainment* | TTFT p95 |", "|---|---:|---:|---:|---:|---:|"]
         at = {r["mode"]: r for r in d["runs"]
               if r.get("concurrency") == top and not r.get("skipped")}
-        for mode in ("fixed:1", "fixed:32", "aimd"):
+        for mode in plotstyle.modes_in(d["runs"]):
             r = at.get(mode)
             if r is None:
                 continue
