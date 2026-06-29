@@ -75,7 +75,7 @@ class Service:
 
     @property
     def model_name(self) -> str:
-        return self.parts.name
+        return self.parts.name if self.parts is not None else "none"
 
     def start(self) -> None:
         self.engine.start()
@@ -92,6 +92,10 @@ class Service:
         async with self._swap_lock:
             await self._swap(name, drain_timeout_s)
 
+    def _restart(self, controller: Controller) -> None:
+        self.engine = self._build_engine(controller)
+        self.engine.start()
+
     async def _swap(self, name: str, drain_timeout_s: float) -> None:
         self.swapping = True
         try:
@@ -107,13 +111,18 @@ class Service:
             _free_device_cache()
             try:
                 self.parts = await asyncio.to_thread(self.loader, name)
-            except Exception:
+            except Exception as first:
                 log.exception("loading %s failed; reloading %s", name, old_name)
-                self.parts = await asyncio.to_thread(self.loader, old_name)
+                try:
+                    self.parts = await asyncio.to_thread(self.loader, old_name)
+                except Exception as second:
+                    # Nothing to serve with; keep the engine stopped (readyz reports it) and
+                    # surface the original failure with the reload failure attached.
+                    raise RuntimeError(f"loading {name!r} failed ({first}) and reloading "
+                                       f"{old_name!r} also failed ({second})") from first
+                self._restart(controller)
                 raise
-            finally:
-                self.engine = self._build_engine(controller)
-                self.engine.start()
+            self._restart(controller)
             log.info("now serving %s", name)
         finally:
             self.swapping = False

@@ -149,3 +149,21 @@ def test_failed_model_swap_keeps_serving():
         assert c.get("/readyz").status_code == 200
         r = c.post("/v1/chat/completions", json={"messages": MSG, "max_tokens": 3})
         assert r.status_code == 200
+
+
+def test_double_swap_failure_reports_the_original_error():
+    svc = fake_service()
+    svc.model_names = ["fake-model", "broken"]
+
+    def loader(name):
+        raise OSError(f"weights missing for {name}")
+
+    svc.loader = loader
+    with TestClient(create_app(svc)) as c:
+        r = c.post("/v1/admin/models/load", json={"model": "broken"})
+        msg = r.json()["error"]["message"]
+        assert r.status_code == 500 and "weights missing for broken" in msg
+        assert "reloading 'fake-model' also failed" in msg
+        assert c.get("/readyz").status_code == 503
+        r = c.post("/v1/chat/completions", json={"messages": MSG, "max_tokens": 3})
+        assert r.status_code == 503

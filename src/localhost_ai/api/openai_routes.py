@@ -51,6 +51,8 @@ def submit(svc: Service, messages: list[dict[str, str]], params_for) -> Handle:
     """Shared by REST and WebSocket. Raises QueueFull / HTTPException."""
     if svc.swapping:
         raise HTTPException(503, "model is being replaced; retry shortly")
+    if svc.parts is None:
+        raise HTTPException(503, "no model is loaded")
     ids = svc.parts.encode_chat(messages)
     params = params_for(len(ids))
     return svc.engine.submit(ids, params)
@@ -70,13 +72,16 @@ def timings(done: DoneEvent) -> Timings:
 @router.get("/v1/models")
 async def list_models(request: Request) -> ModelList:
     svc: Service = request.app.state.svc
+    if svc.parts is None:
+        return ModelList(data=[])
     return ModelList(data=[ModelCard(id=svc.model_name, root=svc.parts.info.get("repo"))])
 
 
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatCompletionRequest, request: Request):
     svc: Service = request.app.state.svc
-    if body.model and body.model not in (svc.model_name, svc.parts.info.get("repo")):
+    repo = svc.parts.info.get("repo") if svc.parts is not None else None
+    if svc.parts is not None and body.model and body.model not in (svc.model_name, repo):
         return error(404, f"model {body.model!r} is not loaded (serving {svc.model_name})",
                      "invalid_request_error", "model_not_found")
     messages = [m.model_dump() for m in body.messages]
