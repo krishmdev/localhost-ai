@@ -37,48 +37,38 @@ Host: arm64, macOS-26.5.1
 
 ![mps-native AIMD trace](figures/aimd_trace_mps-native.png)
 
-- fixed:1: peak 44 tok/s at 8 clients, SLO attainment 100% there.
-- fixed:32: peak 339 tok/s at 64 clients, SLO attainment 1% there.
-- aimd: peak 226 tok/s at 32 clients, SLO attainment 95% there.
+- fixed:1: peak throughput was 44 tok/s at 8 clients; 100% met the SLO at that point.
+- fixed:32: peak throughput was 339 tok/s at 64 clients; 1% met the SLO at that point.
+- aimd: peak throughput was 226 tok/s at 32 clients; 95% met the SLO at that point.
 
 ## CPU, Docker (linux/arm64 VM; contended shared host, rough)
 
-Model `smollm2-135m` (HuggingFaceTB/SmolLM2-135M-Instruct), max_tokens 128, 45 s per point after 5 s warm-up. SLO 1883.2 ms = 3.0 x 627.72 ms single-client median.
+Model `smollm2-135m` (HuggingFaceTB/SmolLM2-135M-Instruct), max_tokens 128, 30 s per point after 5 s warm-up. SLO 635.4 ms = 3.0 x 211.79 ms single-client median.
 
-Memory probe before the run: limit 4.00 GiB, headroom 0.72 (cgroup.memory). Host swap: total = 17408.00M  used = 16993.56M  free = 414.44M  (encrypted).
+Memory probe before the run: limit 4.00 GiB, headroom 0.73 (cgroup.memory). Host swap: total = 12288.00M  used = 11294.25M  free = 993.75M  (encrypted).
 
-Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'
+Host: arm64, macOS-26.5.1
 
-These numbers are rough. Other workloads were running on the machine and in the Docker VM during this sweep (host CPU idle before each point ranged 35-69%). The single-client baseline used for calibration was measured under that load, which sets the SLO (1883.2 ms); 18 of 18 points meet it for 99%+ of requests. Across the AIMD runs the batch limit took 2 distinct value(s): 16 to 17.
+These numbers are rough. Other workloads were running on the machine and in the Docker VM during this sweep (host CPU idle before each point ranged 0-83%). The single-client baseline used for calibration was measured under that load, which sets the SLO (635.4 ms); 8 of 9 points meet it for 99%+ of requests. Across the AIMD runs the batch limit took 1 distinct value(s): stayed at 16. The sweep never had more clients than AIMD's starting limit, so its batch was never saturated and every point stayed under the SLO: there was nothing to adapt to, and AIMD behaved like a fixed batch here. This sweep is not evidence for or against the controller.
 
 | controller | clients | req/s | output tok/s | TTFT p50 / p95 (ms) | request TPOT p50 / p95 (ms) | SLO attainment | errors | host CPU idle before |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| fixed:1 | 1 | 0.02 | 3 | 297 / 297 | 317.4 / 317.4 | 100% | 0 | 40% |
-| fixed:1 | 4 | 0.01 | 1 | 121777 / 121777 | 214.2 / 214.2 | 100% | 0 | 35% |
-| fixed:1 | 8 | 0.02 | 2 | 92354 / 101870 | 185.2 / 190.6 | 100% | 0 | 57% |
-| fixed:1 | 16 | 0.01 | 0 | 263254 / 269821 | 178.9 / 192.0 | 100% | 0 | 68% |
-| fixed:1 | 32 | 0.00 | 0 | 291407 / 291407 | 187.2 / 187.2 | 100% | 2 | 64% |
-| fixed:1 | 64 | 0.00 | 0 | 284176 / 284176 | 183.4 / 183.4 | 100% | 0 | 63% |
-| fixed:32 | 1 | 0.04 | 3 | 229 / 251 | 185.7 / 190.4 | 100% | 0 | 65% |
-| fixed:32 | 4 | 0.12 | 12 | 230 / 343 | 184.6 / 189.5 | 100% | 0 | 67% |
-| fixed:32 | 8 | 0.21 | 21 | 289 / 461 | 233.7 / 250.1 | 100% | 0 | 68% |
-| fixed:32 | 16 | 0.28 | 28 | 406 / 810 | 305.1 / 343.8 | 100% | 0 | 66% |
-| fixed:32 | 32 | 0.12 | 13 | 461 / 716 | 573.6 / 595.3 | 100% | 0 | 49% |
-| fixed:32 | 64 | 0.07 | 6 | 74075 / 87183 | 374.3 / 713.1 | 100% | 0 | 52% |
-| aimd | 1 | 0.02 | 3 | 210 / 210 | 194.9 / 194.9 | 100% | 0 | 47% |
-| aimd | 4 | 0.09 | 10 | 360 / 433 | 211.8 / 213.6 | 100% | 0 | 69% |
-| aimd | 8 | 0.16 | 16 | 427 / 431 | 244.8 / 274.1 | 100% | 0 | 48% |
-| aimd | 16 | 0.15 | 19 | 348 / 471 | 336.9 / 347.0 | 100% | 0 | 65% |
-| aimd | 32 | 0.20 | 20 | 28630 / 41592 | 289.6 / 314.8 | 100% | 0 | 66% |
-| aimd | 64 | 0.05 | 6 | 120200 / 130695 | 390.1 / 434.5 | 100% | 0 | 63% |
+| fixed:1 | 1 | 0.03 | 4 | 670 / 670 | 254.2 / 254.2 | 100% | 0 | 0% |
+| fixed:1 | 4 | 0.00 | 3 | n/a / n/a | n/a / n/a | n/a | 0 | 59% |
+| fixed:1 | 8 | 0.07 | 4 | 3584 / 5904 | 273.8 / 281.4 | 100% | 0 | 0% |
+| fixed:8 | 1 | 0.03 | 5 | 264 / 264 | 205.8 / 205.8 | 100% | 0 | 48% |
+| fixed:8 | 4 | 0.17 | 21 | 786 / 786 | 189.3 / 190.4 | 100% | 0 | 62% |
+| fixed:8 | 8 | 0.33 | 36 | 851 / 1406 | 221.7 / 225.1 | 100% | 0 | 73% |
+| aimd | 1 | 0.03 | 6 | 199 / 199 | 180.1 / 180.1 | 100% | 0 | 72% |
+| aimd | 4 | 0.17 | 22 | 702 / 702 | 181.5 / 185.0 | 100% | 0 | 65% |
+| aimd | 8 | 0.33 | 37 | 883 / 885 | 213.7 / 214.3 | 100% | 0 | 83% |
 
 ![cpu-docker sweep](figures/sweep_cpu-docker.png)
 
 ![cpu-docker AIMD trace](figures/aimd_trace_cpu-docker.png)
 
-- fixed:1: peak 3 tok/s at 1 clients, SLO attainment 100% there.
-- fixed:32: peak 28 tok/s at 16 clients, SLO attainment 100% there.
-- aimd: peak 20 tok/s at 32 clients, SLO attainment 100% there.
+- fixed:1: peak throughput was 4 tok/s at 8 clients; 100% met the SLO at that point.
+- aimd: peak throughput was 37 tok/s at 8 clients; 100% met the SLO at that point.
 
 ## NVIDIA CUDA
 

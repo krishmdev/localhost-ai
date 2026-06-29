@@ -1,16 +1,15 @@
 # localhost-ai
 
-A local LLM inference server built on FastAPI and Hugging Face Transformers. It batches requests
-continuously and picks the batch size at runtime with an AIMD controller. The controller grows
-the batch while per-token latency stays under an SLO and device memory has headroom, and shrinks
-it when either breaks. It serves an OpenAI-compatible chat API (JSON and SSE), a multiplexed
-WebSocket generation API, and a WebSocket telemetry stream that shows the controller's decisions
-live and lets you change the SLO or the batching mode. It exports Prometheus metrics, and runs
-natively (Apple GPU via MPS, CPU, CUDA) or as a Docker Compose stack with Prometheus and a
-provisioned Grafana dashboard.
+A local LLM inference server built with FastAPI and Hugging Face Transformers. It batches requests
+continuously. An AIMD controller raises the batch limit while per-token latency stays under an SLO and
+device memory has room, then lowers it when either constraint fails. The server has an
+OpenAI-compatible chat API (JSON and SSE), a multiplexed WebSocket generation API, and a WebSocket
+telemetry stream. The telemetry shows controller decisions live and lets you change the SLO or
+batching mode. Prometheus metrics are available in native runs (Apple GPU via MPS, CPU, CUDA) and
+in a Docker Compose stack with Prometheus and a provisioned Grafana dashboard.
 
-The default model is SmolLM2-135M-Instruct, pinned to a Hub commit. It's small on purpose: the
-project is about the serving engine, and everything here runs on a 16 GB laptop.
+The default model is SmolLM2-135M-Instruct, pinned to a Hub commit. The model is small on purpose:
+the project focuses on the serving engine, and everything here runs on a 16 GB laptop.
 
 ```mermaid
 flowchart LR
@@ -28,7 +27,7 @@ flowchart LR
 
 ## Quickstart
 
-Setup needs the network once. After that, everything runs offline.
+Setup needs network access once. After that, the commands below run offline.
 
 ```bash
 make setup          # uv sync (locked, CPU/MPS torch) + pinned model into .models/, sha256-checked
@@ -50,8 +49,8 @@ make up             # API on 127.0.0.1:8410, Prometheus :9410, Grafana :3410
 make down
 ```
 
-The compose services sit on an `internal: true` network, so the server, Prometheus and Grafana
-have no route to the internet. An nginx TCP proxy is the only container with published ports.
+The compose services use an `internal: true` network. The server, Prometheus and Grafana have no
+route to the internet; only the nginx TCP proxy publishes ports.
 
 NVIDIA (not tested here, since this machine has no NVIDIA GPU):
 
@@ -101,13 +100,12 @@ either. Set a token before binding anything other than 127.0.0.1.
 
 ## How it works
 
-The scheduler (`engine/scheduler.py`) batches continuously at the iteration level, in the style
-of TGI v1. Each iteration admits queued requests up to the limit L, a prefill token budget and a
-KV-memory budget, then prefills them together. It merges them into the running batch (left-pad,
-concatenate) and runs one decode step for every row, then filters out finished rows. All
-transformers cache handling is in `engine/kv.py`. On an out-of-memory error the newest row is
-preempted by recompute: its KV is dropped and it is prefilled again later with the tokens it
-already generated, so its output doesn't change.
+The scheduler (`engine/scheduler.py`) batches at each iteration, following TGI v1. It admits
+queued requests within the limit L, the prefill token budget and the KV-memory budget, then
+prefills them together. It left-pads and concatenates them with the running batch, decodes one
+token for each row, and removes finished rows. `engine/kv.py` handles all Transformers cache
+operations. If a step runs out of memory, the scheduler drops the newest row's KV and later
+prefills that request again with its generated tokens. Recompute leaves its output unchanged.
 
 The controller (`engine/controller.py`, write-up in [docs/controller.md](docs/controller.md))
 runs once a second. Its update rule, in priority order:
@@ -121,17 +119,17 @@ runs once a second. Its update rule, in priority order:
 7. Otherwise hold.
 8. Clamp L to what fits in memory.
 
-"Fresh" means measured in the current epoch while the batch was within the current limit. Any
-change of L starts a new epoch, so the controller never cuts twice on the same stale evidence.
-The controller only sees decode-step time. Prefill stalls do show up in what a streaming client
-sees, and they're bounded by `LHAI_MAX_PREFILL_TOKENS_PER_STEP`.
+"Fresh" samples were measured in the current epoch while the batch was within the current limit.
+Every change to L starts a new epoch, so stale samples cannot trigger another cut. The controller
+measures decode-step time only. Streaming clients also see prefill stalls; the
+`LHAI_MAX_PREFILL_TOKENS_PER_STEP` setting bounds them.
 
-The controller doesn't settle on one value. In the simulator, with little noise it holds just
-inside the deadband (0.875 of the capacity boundary). With noisy latency it saws between about
-0.8x and 1x of a lower, noise-adjusted boundary. The simulator's acceptance bounds hold on all
-20 seeds except one: with 15% noise (S3), L dipped to 0.469 of the boundary on 1 seed, just
-under the 0.5 floor. That's reported in [docs/controller.md](docs/controller.md), not tuned
-away. The range L actually covered on the real runs is in the results below.
+The controller does not settle on one value. With little noise in the simulator, L holds just
+inside the deadband (0.875 of the capacity boundary). With noisy latency it moves between about
+0.8x and 1x of a lower, noise-adjusted boundary. The simulator met its acceptance bounds on all
+20 seeds except one. With 15% noise (S3), L reached 0.469 of the boundary on that seed, below
+the 0.5 floor. [docs/controller.md](docs/controller.md) records that result without tuning it
+away. The results below show the range L covered in real runs.
 
 On a GPU, "adaptive utilization" means the batch grows until either the latency SLO or free
 device memory stops it. Free memory comes from `mem_get_info` plus PyTorch's cached blocks on
@@ -170,7 +168,7 @@ Memory pressure after the KV-ceiling fix (CPU container capped at 1500m, 32 clie
 - aimd: not OOM-killed, 28 requests completed, 9 failed.
 <!-- results:end -->
 
-Grafana dashboard during the Docker sweep:
+Grafana dashboard during the trimmed Docker CPU sweep (the batch limit steps are the sweep switching modes; AIMD held L at 16 there):
 
 ![Grafana dashboard](docs/grafana.png)
 

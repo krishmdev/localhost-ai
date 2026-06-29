@@ -48,7 +48,9 @@ unified memory and swap. The preflight warning is saved in the file.
 The Docker CPU sweep in `bench/results/cpu-docker.json` is a trimmed rerun (fixed:1, fixed:8 and
 aimd at 1, 4 and 8 clients, 30 s each). It followed the fix that keeps n_min samples of an epoch
 when decode steps are slow. The earlier full sweep had a controller that never acted on CPU,
-because its 5 s window never held 20 steps of 300+ ms. That sweep is superseded.
+because its 5 s window never held 20 steps of 300+ ms. That sweep is superseded. In the rerun, AIMD kept L at 16 on every point. With at most 8 clients,
+the batch was never saturated and latency stayed under the SLO, so the CPU sweep shows
+throughput scaling with batch size. It says nothing about the controller.
 
 ## Memory pressure
 

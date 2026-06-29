@@ -210,7 +210,13 @@ def main() -> None:
                     "calibration was measured under that load, which sets the SLO "
                     f"({d['slo_tpot_ms']} ms); {meets} of {len(ok)} points meet it for 99%+ of "
                     f"requests. Across the AIMD runs the batch limit took {len(aimd_ls)} "
-                    f"distinct value(s): {describe_range(sorted(aimd_ls))}.", ""]
+                    f"distinct value(s): {describe_range(sorted(aimd_ls))}."
+                    + (" The sweep never had more clients than AIMD's starting limit, so its "
+                       "batch was never saturated and every point stayed under the SLO: there "
+                       "was nothing to adapt to, and AIMD behaved like a fixed batch here. This "
+                       "sweep is not evidence for or against the controller."
+                       if len(aimd_ls) == 1 and max(r["concurrency"] for r in ok)
+                       <= min(aimd_ls) else ""), ""]
         out += sweep_table(d)
         out += ["", f"![{label} sweep](figures/{plot_sweep(d, label)})", ""]
         tr = plot_trace(d, label)
@@ -220,8 +226,8 @@ def main() -> None:
             b = best(d, mode, "out_tok_per_s")
             if b:
                 slo = "n/a" if b["slo_attainment"] is None else f"{b['slo_attainment']:.0%}"
-                out.append(f"- {mode}: peak {b['out_tok_per_s']:.0f} tok/s at "
-                           f"{b['concurrency']} clients, SLO attainment {slo} there.")
+                out.append(f"- {mode}: peak throughput was {b['out_tok_per_s']:.0f} tok/s "
+                           f"at {b['concurrency']} clients; {slo} met the SLO at that point.")
         out.append("")
     out += ["## NVIDIA CUDA", "", "Not measured. This machine has no NVIDIA GPU. The CUDA "
             "probe, the cu126 image and `docker-compose.gpu.yml` are untested.", ""]
