@@ -78,14 +78,14 @@ Not measured. This machine has no NVIDIA GPU. The CUDA probe, the cu126 image an
 
 ### After the KV-ceiling fix
 
-Throughput in this section is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
+Throughput in this run is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
 
 Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 60 s, SLO set loose (1000 ms) so only memory matters. The server is recreated before each mode.
 
-| controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s |
-|---|---:|---:|---|---:|---:|
-| fixed:32 | 38 | 0 | not OOM-killed | 1.33 GiB | 22 |
-| aimd | 28 | 9 | not OOM-killed | 1.33 GiB | 11 |
+| controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s | TTFT p95 |
+|---|---:|---:|---|---:|---:|---:|
+| fixed:32 | 38 | 0 | not OOM-killed | 1.33 GiB | 22 | 283 s |
+| aimd | 28 | 9 | not OOM-killed | 1.33 GiB | 11 | 530 s |
 
 - fixed:32: batch limit stayed at 32, running rows at most 9, headroom 9%-26%, non-hold telemetry samples none, error kinds none.
 - aimd: batch limit 1 to 11, running rows at most 8, headroom 9%-24%, non-hold telemetry samples {'clamp': 17, 'mem_decrease': 1, 'increase': 17}, error kinds {'ReadTimeout': 9}.
@@ -94,16 +94,34 @@ Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 60 s, SL
 
 Host: arm64, macOS-26.5.1
 
+### AIMD only, with the active-row guard (separate session, no fixed baseline)
+
+Only `aimd` ran in this session, so there is no same-session baseline; the other runs in this section used different host windows and aren't comparable to it. Requests could keep draining after the load window ends, so TTFT p95 (398 s) includes long queue waits.
+
+Throughput in this run is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
+
+Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 60 s, SLO set loose (1000 ms) so only memory matters. The server is recreated before each mode.
+
+| controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s | TTFT p95 |
+|---|---:|---:|---|---:|---:|---:|
+| aimd | 35 | 0 | not OOM-killed | 1.33 GiB | 18 | 398 s |
+
+- aimd: batch limit 1 to 14, running rows at most 9, headroom 9%-26%, non-hold telemetry samples {'clamp': 17, 'mem_decrease': 7, 'increase': 10}, error kinds none.
+
+![memory pressure](figures/mempressure_controller_guard.png)
+
+Host: arm64, macOS-26.5.1
+
 ### Before the KV-ceiling fix (history)
 
-Throughput in this section is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
+Throughput in this run is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
 
 Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 90 s, SLO set loose (1000 ms) so only memory matters. The server is recreated before each mode.
 
-| controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s |
-|---|---:|---:|---|---:|---:|
-| fixed:32 | 41 | 0 | not OOM-killed | 1.33 GiB | 20 |
-| aimd | 28 | 12 | not OOM-killed | 1.29 GiB | 11 |
+| controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s | TTFT p95 |
+|---|---:|---:|---|---:|---:|---:|
+| fixed:32 | 41 | 0 | not OOM-killed | 1.33 GiB | 20 | 306 s |
+| aimd | 28 | 12 | not OOM-killed | 1.29 GiB | 11 | 584 s |
 
 - fixed:32: batch limit stayed at 32, running rows at most 9, headroom 9%-25%, non-hold telemetry samples none, error kinds none.
 - aimd: batch limit 1 to 13, running rows at most 9, headroom 12%-25%, non-hold telemetry samples {'clamp': 22, 'increase': 18}, error kinds {'ReadTimeout': 12}.

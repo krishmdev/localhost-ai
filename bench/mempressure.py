@@ -81,6 +81,7 @@ def main() -> None:
 
     out = {
         "label": "cpu-mempressure",
+        "throughput_source": "server_counter",
         "config": vars(args),
         "runs": runs,
         "manifest": loadgen.manifest(None, {"target": "cpu-docker-mempressure",

@@ -234,6 +234,9 @@ def main() -> None:
     out += ["## Memory pressure (CPU, Docker)", ""]
     for key, heading, fig in (
             ("cpu-mempressure", "After the KV-ceiling fix", "mempressure.png"),
+            ("cpu-mempressure-controller-guard",
+             "AIMD only, with the active-row guard (separate session, no fixed baseline)",
+             "mempressure_controller_guard.png"),
             ("cpu-mempressure-before-ceiling-fix", "Before the KV-ceiling fix (history)",
              "mempressure_before_fix.png")):
         mp = load(key)
@@ -242,14 +245,22 @@ def main() -> None:
             out += ["Not run yet.", ""]
             continue
         c = mp["config"]
-        out += ["Throughput in this section is the older client-side count (tokens of requests "
-                "that started after the warm-up), not the server counter used above.", ""]
+        if len(mp["runs"]) == 1:
+            r0 = mp["runs"][0]
+            out += [f"Only `{r0['mode']}` ran in this session, so there is no same-session "
+                    "baseline; the other runs in this section used different host windows and "
+                    "aren't comparable to it. Requests could keep draining after the load window "
+                    f"ends, so TTFT p95 ({fmt(r0['ttft_p95_ms'] / 1e3, 0)} s) includes long queue "
+                    "waits.", ""]
+        if mp.get("throughput_source") != "server_counter":
+            out += ["Throughput in this run is the older client-side count (tokens of requests "
+                    "that started after the warm-up), not the server counter used above.", ""]
         out += [f"Server container limited to {c['mem_limit']} (cgroup), {c['concurrency']} "
                 f"clients, max_tokens {c['max_tokens']}, {c['duration']:.0f} s, SLO set loose "
                 f"({c['slo_tpot_ms']:.0f} ms) so only memory matters. The server is recreated "
                 "before each mode.", "",
                 "| controller | completed | errors | container after the run | peak memory seen "
-                "by the probe | output tok/s |", "|---|---:|---:|---|---:|---:|"]
+                "by the probe | output tok/s | TTFT p95 |", "|---|---:|---:|---|---:|---:|---:|"]
         for r in mp["runs"]:
             st = r["container"]
             state = "OOM-killed" if st.get("oom_killed") else "not OOM-killed"
@@ -257,7 +268,8 @@ def main() -> None:
             out.append(f"| {r['mode']} | {r['completed']} | {r['errors']} | {state} "
                        "| "
                        f"{fmt(None if peak is None else peak / 2**30, 2, ' GiB')} | "
-                       f"{r['out_tok_per_s']:.0f} |")
+                       f"{r['out_tok_per_s']:.0f} | "
+                       f"{fmt(r['ttft_p95_ms'] / 1e3 if r['ttft_p95_ms'] else None, 0, ' s')} |")
         out.append("")
         for r in mp["runs"]:
             tr = r.get("trace") or []

@@ -374,6 +374,7 @@ async def main_async(args) -> dict:
              "duration_s": args.duration}
     return {
         "label": args.label,
+        "throughput_source": "server_counter",
         "started": started,
         "config": {k: (Path(v).name if k in ("prompts", "manifest") and v else v)
                    for k, v in vars(args).items() if k not in ("admin_token",)},
