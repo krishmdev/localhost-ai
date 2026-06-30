@@ -169,10 +169,12 @@ AIMD's batch limit during that run: 8 to 17.
 
 NVIDIA CUDA: not measured (no NVIDIA GPU here). The Docker CPU sweep ran on a contended host; its rough numbers are in RESULTS.md only.
 
-Memory pressure after the KV-ceiling fix (CPU container capped at 1500m, 32 clients, 512 tokens each):
+Memory pressure, same-session pair on the current code (CPU container capped at 1500m, 32 clients, 512 tokens each, 60 s):
 
-- fixed:32: not OOM-killed, 38 requests completed, 0 failed.
-- aimd: not OOM-killed, 28 requests completed, 9 failed.
+- fixed:32: not OOM-killed, 32 tok/s, 7 requests finished inside the window, 0 failed.
+- aimd: not OOM-killed, 37 tok/s, 5 requests finished inside the window, 0 failed.
+
+Earlier pressure runs (before the guard, and an AIMD-only run) are in RESULTS.md; they come from different host windows and aren't compared here.
 <!-- results:end -->
 
 Grafana dashboard during the trimmed Docker CPU sweep (the batch limit steps are the sweep switching modes; AIMD held L at 16 there):

@@ -243,7 +243,10 @@ def main() -> None:
             "probe, the cu126 image and `docker-compose.gpu.yml` are untested.", ""]
     out += ["## Memory pressure (CPU, Docker)", ""]
     for key, heading, fig in (
-            ("cpu-mempressure", "After the KV-ceiling fix", "mempressure.png"),
+            ("cpu-mempressure-guard-pair",
+             "Same-session pair with the active-row guard (current code)",
+             "mempressure_guard_pair.png"),
+            ("cpu-mempressure", "After the KV-ceiling fix, before the guard", "mempressure.png"),
             ("cpu-mempressure-controller-guard",
              "AIMD only, with the active-row guard (separate session, no fixed baseline)",
              "mempressure_controller_guard.png"),
@@ -262,7 +265,12 @@ def main() -> None:
                     "aren't comparable to it. Requests could keep draining after the load window "
                     f"ends, so TTFT p95 ({fmt(r0['ttft_p95_ms'] / 1e3, 0)} s) includes long queue "
                     "waits.", ""]
-        if mp.get("throughput_source") != "server_counter":
+        if mp.get("throughput_source") == "server_counter":
+            out += ["Throughput is the server's token counter over the load window. "
+                    "\"Completed\" and TTFT only count requests that finished inside that "
+                    "window; with 512-token requests on a slow CPU most were still running at "
+                    "the deadline, so those samples are small.", ""]
+        else:
             out += ["Throughput in this run is the older client-side count (tokens of requests "
                     "that started after the warm-up), not the server counter used above.", ""]
         out += [f"Server container limited to {c['mem_limit']} (cgroup), {c['concurrency']} "
@@ -346,16 +354,20 @@ def readme_summary() -> list[str]:
                  "count over the measurement window."]
     rows += ["", "NVIDIA CUDA: not measured (no NVIDIA GPU here). The Docker CPU sweep ran on a "
              "contended host; its rough numbers are in RESULTS.md only."]
-    mp = load("cpu-mempressure")
+    mp = load("cpu-mempressure-guard-pair")
     if mp:
-        rows += ["", f"Memory pressure after the KV-ceiling fix (CPU container capped at "
-                 f"{mp['config']['mem_limit']}, {mp['config']['concurrency']} clients, "
-                 f"{mp['config']['max_tokens']} tokens each):", ""]
+        rows += ["", "Memory pressure, same-session pair on the current code (CPU container "
+                 f"capped at {mp['config']['mem_limit']}, {mp['config']['concurrency']} clients, "
+                 f"{mp['config']['max_tokens']} tokens each, {mp['config']['duration']:.0f} s):",
+                 ""]
         for r in mp["runs"]:
             st = r["container"]
             outcome = "OOM-killed by the kernel" if st.get("oom_killed") else "not OOM-killed"
-            rows.append(f"- {r['mode']}: {outcome}, "
-                        f"{r['completed']} requests completed, {r['errors']} failed.")
+            rows.append(f"- {r['mode']}: {outcome}, {r['out_tok_per_s']:.0f} tok/s, "
+                        f"{r['completed']} requests finished inside the window, "
+                        f"{r['errors']} failed.")
+        rows += ["", "Earlier pressure runs (before the guard, and an AIMD-only run) are in "
+                 "RESULTS.md; they come from different host windows and aren't compared here."]
     return rows
 
 if __name__ == "__main__":

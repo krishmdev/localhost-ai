@@ -49,7 +49,7 @@ Memory probe before the run: limit 4.00 GiB, headroom 0.73 (cgroup.memory). Host
 
 Host: arm64, macOS-26.5.1
 
-These numbers are rough. Other workloads were running on the machine and in the Docker VM during this sweep (host CPU idle before each point ranged 0-83%). The single-client baseline used for calibration was measured under that load, which sets the SLO (635.4 ms); 8 of 9 points meet it for 99%+ of requests. Across the AIMD runs the batch limit took 1 distinct value(s): stayed at 16. The sweep never had more clients than AIMD's starting limit, so its batch was never saturated and every point stayed under the SLO: there was nothing to adapt to, and AIMD behaved like a fixed batch here. This sweep is not evidence for or against the controller.
+These numbers are rough. Other workloads were running on the machine and in the Docker VM during this sweep (host CPU idle before each point ranged 0-83%). The single-client baseline used for calibration was measured under that load, which sets the SLO (635.4 ms); 8 of 8 points with completed requests meet it for 99%+ of them (1 point(s) completed no request inside the window). Across the AIMD runs the batch limit took 1 distinct value(s): stayed at 16. The sweep never had more clients than AIMD's starting limit, so its batch was never saturated and every AIMD point stayed under the SLO: there was nothing to adapt to, and AIMD behaved like a fixed batch of 16 here. This sweep is not evidence for or against the controller.
 
 | controller | clients | req/s | output tok/s | TTFT p50 / p95 (ms) | request TPOT p50 / p95 (ms) | SLO attainment | errors | host CPU idle before |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -68,6 +68,7 @@ These numbers are rough. Other workloads were running on the machine and in the 
 ![cpu-docker AIMD trace](figures/aimd_trace_cpu-docker.png)
 
 - fixed:1: peak throughput was 4 tok/s at 8 clients; 100% met the SLO at that point.
+- fixed:8: peak throughput was 36 tok/s at 8 clients; 100% met the SLO at that point.
 - aimd: peak throughput was 37 tok/s at 8 clients; 100% met the SLO at that point.
 
 ## NVIDIA CUDA
@@ -76,7 +77,25 @@ Not measured. This machine has no NVIDIA GPU. The CUDA probe, the cu126 image an
 
 ## Memory pressure (CPU, Docker)
 
-### After the KV-ceiling fix
+### Same-session pair with the active-row guard (current code)
+
+Throughput is the server's token counter over the load window. "Completed" and TTFT only count requests that finished inside that window; with 512-token requests on a slow CPU most were still running at the deadline, so those samples are small.
+
+Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 60 s, SLO set loose (1000 ms) so only memory matters. The server is recreated before each mode.
+
+| controller | completed | errors | container after the run | peak memory seen by the probe | output tok/s | TTFT p95 |
+|---|---:|---:|---|---:|---:|---:|
+| fixed:32 | 7 | 0 | not OOM-killed | 1.32 GiB | 32 | 9 s |
+| aimd | 5 | 0 | not OOM-killed | 1.32 GiB | 37 | 2 s |
+
+- fixed:32: batch limit stayed at 32, running rows at most 11, headroom 10%-27%, non-hold telemetry samples none, error kinds none.
+- aimd: batch limit 2 to 15, running rows at most 11, headroom 10%-27%, non-hold telemetry samples {'clamp': 11, 'increase': 6}, error kinds none.
+
+![memory pressure](figures/mempressure_guard_pair.png)
+
+Host: arm64, macOS-26.5.1
+
+### After the KV-ceiling fix, before the guard
 
 Throughput in this run is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
 
