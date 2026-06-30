@@ -167,3 +167,24 @@ def test_double_swap_failure_reports_the_original_error():
         assert c.get("/readyz").status_code == 503
         r = c.post("/v1/chat/completions", json={"messages": MSG, "max_tokens": 3})
         assert r.status_code == 503
+
+
+def test_server_recovers_after_double_swap_failure():
+    svc = fake_service()
+    good = svc.parts
+    svc.model_names = ["fake-model", "broken"]
+    calls = {"n": 0}
+
+    def loader(name):
+        calls["n"] += 1
+        if calls["n"] <= 2:  # the swap fails, and so does reloading the old model
+            raise OSError("disk unavailable")
+        return good
+
+    svc.loader = loader
+    with TestClient(create_app(svc)) as c:
+        assert c.post("/v1/admin/models/load", json={"model": "broken"}).status_code == 500
+        assert c.get("/readyz").status_code == 503
+        r = c.post("/v1/admin/models/load", json={"model": "fake-model"})
+        assert r.status_code == 200 and r.json()["model"] == "fake-model"
+        assert c.get("/readyz").status_code == 200

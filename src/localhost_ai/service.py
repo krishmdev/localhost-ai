@@ -106,12 +106,15 @@ class Service:
             controller = self.engine.controller
             self.engine.stop()
             self.engine.scheduler.fail_all("model is being replaced")
-            old_name = self.parts.name
+            # None after an earlier swap failed twice; then there is nothing to fall back to.
+            old_name = self.parts.name if self.parts is not None else None
             self.parts = None  # type: ignore[assignment]
             _free_device_cache()
             try:
                 self.parts = await asyncio.to_thread(self.loader, name)
             except Exception as first:
+                if old_name is None:
+                    raise
                 log.exception("loading %s failed; reloading %s", name, old_name)
                 try:
                     self.parts = await asyncio.to_thread(self.loader, old_name)
