@@ -65,7 +65,20 @@ controller mode was OOM-killed in either run.
   requests with no errors. aimd completed 28, and 9 timed out. AIMD's limit dropped to 1 within
   3 s and stayed between 1 and 11. Headroom sat under the 20% high watermark most of the time.
 
-AIMD shows no advantage in this scenario. The fixed ceiling estimate is covered by
+There are two more runs after the fix:
+
+- An AIMD-only run with the active-row guard, taken from a separate working copy
+  (`bench/results/cpu-mempressure-controller-guard.json`, 60 s): 35 requests completed with no
+  errors, but TTFT p95 was 398 s. It had no fixed baseline in the same session, and its
+  throughput uses the older client-side count.
+- A same-session fixed:32 vs aimd pair on the current code
+  (`bench/results/cpu-mempressure-guard-pair.json`, 60 s each, server-counted throughput):
+  - fixed:32: 32 tok/s. 7 requests finished inside the window, TTFT p95 9 s.
+  - aimd: 37 tok/s. 5 finished, TTFT p95 2 s, and L ranged from 2 to 15.
+  - Neither mode had errors or was OOM-killed.
+  - The samples are too small to call a winner.
+
+The earlier runs show no AIMD advantage. The fixed ceiling estimate is covered by
 `test_kv_ceiling_does_not_undercut_admission`.
 
 ## Simulator

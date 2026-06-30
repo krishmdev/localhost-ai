@@ -231,20 +231,20 @@ Models are pinned in `models.yaml` (repo and commit) and hashed in `models.lock`
 - The controller holds decode-step latency, not end-to-end latency. TTFT grows with queueing
   when the batch is capped.
 - Benchmarks ran on a shared machine; see the manifests.
-- The memory-pressure scenario does not show an AIMD advantage, before or after fixing the KV
-  ceiling. With a 1.5 GB container limit neither mode was OOM-killed: the KV admission budget
-  applies in fixed mode too and kept fixed:32 to 9 or fewer rows. The first run found a real bug
-  (the ceiling assumed every row was as long as the longest recent request). After the fix
-  (the ceiling now uses the same per-request estimate as admission, with a unit test), AIMD still
-  did worse: 28 completed and 9 timed out, against 38 and 0 for fixed:32. The reason is the
-  watermarks. The model and runtime alone use most of a 1.5 GB container, so headroom sits
-  at 9-26%, often under the 20% needed to grow L. The early clamp to L = 1 then held, and AIMD
-  admitted one request at a time while its batch drained. The KV reserve (15% of the
-  limit) sits above the low watermark (10%), so the memory ceiling bites before the watermark
-  rule does; tying the reserve to the watermarks is a possible change, not yet measured. At this size, fixed:32 with the
-  admission budget is the better choice. Watermarks defined relative to memory above the model's
-  baseline would likely help, but that's untested. The earlier claim that fixed:32 gets
-  OOM-killed is dropped.
+- The memory-pressure scenario (1.5 GB container, 32 clients, 512-token requests) doesn't show a
+  clear AIMD advantage, and neither mode was ever OOM-killed. The KV admission budget applies
+  in fixed mode too, which keeps fixed:32 to about 10 rows. The earlier claim that fixed:32 gets
+  OOM-killed is dropped. The history:
+  - The first runs found two real problems: the KV ceiling assumed every row was as long as the
+    longest recent request, and a low ceiling estimate ratcheted L down while admitted rows
+    drained. With those, AIMD fell to L = 1 and requests timed out.
+  - Both are fixed, with tests.
+  - In the latest same-session pair, AIMD produced 37 tok/s against 32 for fixed:32, with no
+    errors on either side.
+  - That is one 60 s run each, and only a handful of requests finished inside the window, so
+    it's no evidence that AIMD is better. It only shows the earlier AIMD failures are gone.
+  - The KV reserve (15%) still sits above the low watermark (10%). Tying them together, or
+    measuring headroom above the model's baseline, is untested.
 
 ## Layout
 
