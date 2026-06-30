@@ -35,7 +35,14 @@ backs off when either breaks.
 7. Otherwise (p95 in the [0.9 SLO, SLO] deadband): hold.
 8. Clamp L to [Lmin, min(Lmax, KV ceiling)]. The KV ceiling is
    (headroom - reserve x limit + KV already held) / (kv_bytes_per_token x estimated row length).
-   A clamp stops admissions but never preempts.
+   A clamp stops admissions but never preempts. When the ceiling estimate is below the rows
+   already running, a hold or increase keeps the previous L instead. Without this guard, a
+   transient low reading clears the epoch's evidence and ratchets L down one step per
+   finished row. The admission check still blocks new joins against the KV budget, and real
+   memory pressure goes through rule 2, which sheds. An SLO or memory decrease keeps its own
+   target rather than being cut further by the estimate. This guard was first written in a
+   separate working copy; it was reviewed and ported here with its tests. The simulator's
+   "L <= KV ceiling" check still holds on every seed.
 
 ## Fresh evidence
 

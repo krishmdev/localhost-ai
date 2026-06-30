@@ -123,7 +123,8 @@ runs once a second. Its update rule, in priority order:
 5. Cooldown after an OOM: hold.
 6. p95 under 90% of the SLO, with headroom above 20% and a full batch: L + 10%.
 7. Otherwise hold.
-8. Clamp L to what fits in memory.
+8. Clamp growth to what fits in memory. If the estimate drops below the rows already running, L
+   stays put and admission's own KV check blocks new joins.
 
 "Fresh" samples were measured in the current epoch while the batch was within the current limit.
 Every change to L starts a new epoch, so stale samples cannot trigger another cut. The controller
