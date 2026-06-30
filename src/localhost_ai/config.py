@@ -46,7 +46,8 @@ class Settings(BaseSettings):
     admin_token: str = ""
     # Host headers the server answers to (DNS-rebinding guard), comma-separated; "server" is
     # the compose service name Prometheus scrapes, "testserver" is Starlette's test client.
-    allowed_hosts: str = "localhost,127.0.0.1,::1,server,testserver"
+    # IPv6 literals can't be listed: Starlette's check splits the Host header on ":".
+    allowed_hosts: str = "localhost,127.0.0.1,server,testserver"
     host: str = "127.0.0.1"
     port: int = 8000
 

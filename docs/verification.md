@@ -69,7 +69,7 @@ There are two more runs after the fix:
 
 - An AIMD-only run with the active-row guard, taken from a separate working copy
   (`bench/results/cpu-mempressure-controller-guard.json`, 60 s): 35 requests completed with no
-  errors, but TTFT p95 was 398 s. It had no fixed baseline in the same session, and its
+  errors, but TTFT p95 was 398 s (60 s of load, 523 s including the drain). It had no fixed baseline in the same session, and its
   throughput uses the older client-side count.
 - A same-session fixed:32 vs aimd pair on the current code
   (`bench/results/cpu-mempressure-guard-pair.json`, 60 s each, server-counted throughput):
