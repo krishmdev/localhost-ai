@@ -120,3 +120,73 @@ def test_failed_step_loses_the_cache_and_reads_as_oom(runner, monkeypatch):
         with pytest.raises(CacheLost) as exc:
             call()
         assert is_oom(exc.value)
+
+
+def tiny_qwen3_5():
+    """Qwen3.5's text stack: gated-delta linear attention (ArraysCache: conv + recurrent state)
+    every layer except each second one, which is full attention (KVCache)."""
+    from mlx_lm.models import qwen3_5
+
+    mx.random.seed(0)
+    args = qwen3_5.TextModelArgs(model_type="qwen3_5_text", hidden_size=64, intermediate_size=128,
+                                 num_hidden_layers=4, num_attention_heads=4,
+                                 num_key_value_heads=2, head_dim=16, vocab_size=VOCAB,
+                                 linear_num_value_heads=4, linear_num_key_heads=2,
+                                 linear_key_head_dim=16, linear_value_head_dim=16,
+                                 full_attention_interval=2)
+    model = qwen3_5.TextModel(args)
+    mx.eval(model.parameters())
+    return model
+
+
+@pytest.fixture(scope="module")
+def hybrid():
+    return MLXModelRunner(tiny_qwen3_5(), eos_ids=frozenset({0}))
+
+
+def test_hybrid_caches_leave_recurrent_left_padding_unset(hybrid):
+    from mlx_lm.models.cache import ArraysCache, BatchKVCache
+
+    from localhost_ai.engine.mlx_runner import batch_cache
+
+    cache = batch_cache(hybrid.model, 3)
+    assert [type(c) for c in cache] == [ArraysCache, BatchKVCache] * 2
+    assert all(c.left_padding is None for c in cache if isinstance(c, ArraysCache))
+
+
+def test_hybrid_right_padded_prefill_keeps_pads_out_of_recurrent_state(hybrid):
+    # Regression: with a zero left_padding on the recurrent caches, ArraysCache.make_mask
+    # ignored the prefill lengths and the pad tokens after each shorter prompt ran through the
+    # gated-delta state, so every row but the longest came out wrong (max logit diff 0.07).
+    ref = [alone(hybrid, p, f) for p, f in zip(PROMPTS, FORCED, strict=True)]
+    state, logits = hybrid.prefill(PROMPTS)
+    steps = [logits]
+    for i in range(2):
+        steps.append(hybrid.decode(state, [f[i] for f in FORCED]))
+    for step, got in enumerate(steps):
+        for row in range(len(PROMPTS)):
+            assert_close(got[row], ref[row][step])
+
+
+def test_hybrid_join_and_select_match_alone(hybrid):
+    ref = [alone(hybrid, p, f) for p, f in zip(PROMPTS, FORCED, strict=True)]
+    first, _ = hybrid.prefill(PROMPTS[:2])
+    hybrid.decode(first, [FORCED[0][0], FORCED[1][0]])
+    late, _ = hybrid.prefill(PROMPTS[2:])
+    merged = hybrid.merge(first, late)
+    got = hybrid.decode(merged, [FORCED[0][1], FORCED[1][1], FORCED[2][0], FORCED[3][0]])
+    for row, step in enumerate([2, 2, 1, 1]):
+        assert_close(got[row], ref[row][step])
+    kept = hybrid.select(merged, [0, 3])
+    got = hybrid.decode(kept, [FORCED[0][2], FORCED[3][1]])
+    assert_close(got[0], ref[0][3])
+    assert_close(got[1], ref[3][2])
+
+
+def test_hybrid_reports_fixed_recurrent_state_per_row(hybrid):
+    # 2 linear-attention layers, each: fp32 delta state 4 v-heads x 16 x 16, plus the conv
+    # state (kernel 4 - 1) x conv_dim (2 x 2 x 16 + 4 x 16 = 128) in the activation dtype
+    delta = 4 * 16 * 16 * 4
+    conv = 3 * 128 * 4
+    assert hybrid.row_state_bytes == 2 * (delta + conv)
+    assert hybrid.kv_bytes_per_token == 2 * 2 * 2 * 16 * 4  # the 2 full-attention layers
