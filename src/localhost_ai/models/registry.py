@@ -18,6 +18,10 @@ ALLOW = ["config.json", "generation_config.json", "model.safetensors", "tokenize
          "model.safetensors.index.json", "model-*-of-*.safetensors", "added_tokens.json",
          "chat_template.jinja"]
 
+# torch presets quantize on load (bitsandbytes, CUDA only); mlx presets name a checkpoint that
+# is already quantized, and the label is checked against its config.json when it loads.
+QUANTIZATION = {"torch": {None, "bnb8", "bnb4"}, "mlx": {None, "mlx4", "mlx8"}}
+
 
 @dataclass(frozen=True)
 class ModelSpec:
@@ -28,6 +32,15 @@ class ModelSpec:
     dtype: str | None = None
     quantization: str | None = None
     max_new_tokens: int = 256
+    backend: str = "torch"
+    chat_template_kwargs: dict | None = None  # e.g. {"enable_thinking": false}
+
+    def __post_init__(self) -> None:
+        if self.backend not in QUANTIZATION:
+            raise ValueError(f"{self.name}: backend must be one of {sorted(QUANTIZATION)}")
+        if self.quantization not in QUANTIZATION[self.backend]:
+            raise ValueError(f"{self.name}: quantization {self.quantization!r} is not valid for "
+                             f"backend {self.backend}")
 
 
 class Registry:
