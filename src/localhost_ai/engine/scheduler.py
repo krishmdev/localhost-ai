@@ -164,12 +164,14 @@ class Scheduler:
         self._trim_stats(now)
         if self.probe is not None:
             self.mem = self.probe.snapshot()
-        kv_in_use = self.kv_tokens * self.runner.kv_bytes_per_token
+        extra = self.row_state_tokens
+        kv_in_use = (self.kv_tokens + extra * len(self.running)) * self.runner.kv_bytes_per_token
         self._kv_at_tick = kv_in_use
         self.kv_ceiling = None
         if self.mem is not None:
             self.kv_ceiling = kv_ceiling(self.mem, self.cfg.mem_reserve, kv_in_use,
-                                         self.runner.kv_bytes_per_token, self.est_seq_len)
+                                         self.runner.kv_bytes_per_token,
+                                         self.est_seq_len + extra)
         d = self.controller.tick(Observation(now=now, running=len(self.running),
                                              queued=len(self.waiting), mem=self.mem,
                                              kv_ceiling=self.kv_ceiling))
@@ -185,6 +187,14 @@ class Scheduler:
     @property
     def kv_tokens(self) -> int:
         return self.runner.padded_tokens(self.state) if self.state is not None else 0
+
+    @property
+    def row_state_tokens(self) -> int:
+        """Memory every row holds regardless of its length, in KV-token equivalents: the
+        recurrent state of linear-attention layers (Qwen3.5 on MLX). The ceiling and admission
+        count it on top of each row's KV. 0 for pure-attention models."""
+        fixed = getattr(self.runner, "row_state_bytes", 0)
+        return -(-fixed // max(1, self.runner.kv_bytes_per_token)) if fixed > 0 else 0
 
     @property
     def est_seq_len(self) -> int:
@@ -253,7 +263,8 @@ class Scheduler:
                     break
                 if budget is not None:
                     rows = len(self.running) + len(admitted) + 1
-                    projected = rows * (max(cur_len, n) + max(1, req.remaining // 2))
+                    projected = rows * (max(cur_len, n) + max(1, req.remaining // 2)
+                                        + self.row_state_tokens)
                     if projected > budget and (self.running or admitted):
                         break
                 self.waiting.popleft()

@@ -1,4 +1,5 @@
 import math
+from dataclasses import dataclass
 
 import pytest
 from fakes import EOS, FakeRunner, FakeTokenizer, VirtualClock, reference
@@ -341,6 +342,34 @@ def test_kv_ceiling_does_not_undercut_admission():
     assert s.kv_ceiling is not None and s.kv_ceiling >= admitted
     assert ctl.limit >= admitted
     assert ctl.last.action != "clamp"
+
+
+def test_fixed_per_row_state_counts_against_the_kv_budget():
+    # A hybrid model (Qwen3.5 on MLX) holds recurrent state per row on top of its KV. At 50 KV
+    # tokens' worth per row, a 750-token budget fits 11 rows of 5 + 10 projected tokens, not 20.
+    @dataclass
+    class HybridRunner(FakeRunner):
+        row_state_bytes: int = 50_000
+
+    def run(runner):
+        probe = FakeProbe(limit=1_000_000, used=100_000)  # ~750 tokens of budget at 1000 B/token
+        ctl = AIMDController(AIMDConfig(initial=32, max_batch=64))
+        s = make(runner=runner, controller=ctl, probe=probe, control_interval_s=0.0)
+        for i in range(20):
+            s.add(req([i % 30 + 1] * 5, SamplingParams(temperature=0.0, max_tokens=20)))
+        s.step()
+        admitted = len(s.running)
+        s.step()
+        return admitted, s
+
+    plain_admitted, plain = run(FakeRunner())
+    admitted, s = run(HybridRunner())
+    assert plain_admitted == 20 and plain.row_state_tokens == 0
+    assert admitted == 11 and s.row_state_tokens == 50
+    # the ceiling divides by est_seq_len + 50 per row instead of est_seq_len alone
+    assert s.kv_ceiling is not None and plain.kv_ceiling is not None
+    assert s.kv_ceiling < plain.kv_ceiling / 2
+    drain(s)
 
 
 def test_transient_low_headroom_preserves_limit_but_gates_new_admission():
