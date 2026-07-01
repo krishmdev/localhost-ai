@@ -256,10 +256,14 @@ async def preflight(url: str, token: str) -> dict:
     mem = snap.get("memory") or {}
     out = {"device": snap.get("device"), "dtype": snap.get("dtype"), "memory": mem,
            "host_swap": swap.stdout.strip() or None, "warnings": []}
+    for key in ("backend", "quant", "kv_bytes_per_token", "row_state_bytes"):
+        if key in snap:
+            out[key] = snap[key]
     limit = mem.get("limit_bytes") or 0
-    if snap.get("device") == "mps" and limit < 4 * 2**30:
-        out["warnings"].append(f"MPS memory limit is only {limit / 2**30:.2f} GiB; other "
-                               "processes are holding unified memory")
+    if snap.get("device") in ("mps", "metal") and limit < 4 * 2**30:
+        out["warnings"].append(f"{snap['device'].upper()} memory limit is only "
+                               f"{limit / 2**30:.2f} GiB; other processes are holding unified "
+                               "memory")
     for w in out["warnings"]:
         print(f"preflight warning: {w}", file=sys.stderr)
     return out
