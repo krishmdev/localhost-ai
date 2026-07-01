@@ -26,3 +26,13 @@ models:
     backend: mlx
     quantization: mlx4
     max_new_tokens: 256
+  # Hybrid gated-delta / full-attention model; the vision tower in the checkpoint is dropped on
+  # load. Thinking is off so a chat request gets the answer, not a reasoning trace.
+  qwen3.5-9b-mlx4:
+    repo: mlx-community/Qwen3.5-9B-MLX-4bit
+    revision: 938d8919941c6e7efd3c7150eff7fe9d12afa631
+    license: apache-2.0
+    backend: mlx
+    quantization: mlx4
+    chat_template_kwargs: {enable_thinking: false}
+    max_new_tokens: 256
