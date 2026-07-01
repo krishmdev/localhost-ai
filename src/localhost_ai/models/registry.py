@@ -11,8 +11,12 @@ from pathlib import Path
 import yaml
 
 # Only the files needed to run the model; the Hub repos also carry ONNX exports and training logs.
+# Larger checkpoints are sharded (index + model-0000k-of-0000n), and newer tokenizers keep the
+# chat template in its own file.
 ALLOW = ["config.json", "generation_config.json", "model.safetensors", "tokenizer.json",
-         "tokenizer_config.json", "special_tokens_map.json", "vocab.json", "merges.txt"]
+         "tokenizer_config.json", "special_tokens_map.json", "vocab.json", "merges.txt",
+         "model.safetensors.index.json", "model-*-of-*.safetensors", "added_tokens.json",
+         "chat_template.jinja"]
 
 
 @dataclass(frozen=True)
