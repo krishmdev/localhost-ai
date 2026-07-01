@@ -157,6 +157,18 @@ def test_oom_preempts_newest_and_output_is_unchanged():
         assert done(r).finish_reason == "length"
 
 
+def test_backend_allocator_errors_count_as_oom():
+    from localhost_ai.engine.runner import is_oom
+
+    # the message MLX raises when a buffer is too big for Metal (seen on an M1 Pro)
+    assert is_oom(RuntimeError("[metal::malloc] Attempting to allocate 274877906944 bytes which "
+                               "is greater than the maximum allowed buffer size of 9534832640 "
+                               "bytes."))
+    assert is_oom(RuntimeError("MPS backend out of memory (MPS allocated: 1.2 GB)"))
+    assert is_oom(MemoryError())
+    assert not is_oom(RuntimeError("shapes (2,3) and (4,) cannot be broadcast"))
+
+
 def test_oom_is_reported_to_controller():
     runner = FakeRunner(oom_above_tokens=30)
     ctl = AIMDController(AIMDConfig(initial=8))

@@ -28,6 +28,7 @@ def is_oom(exc: BaseException) -> bool:
     msg = str(exc).lower()
     return isinstance(exc, RuntimeError) and (
         "out of memory" in msg or "can't allocate memory" in msg or "mps backend out of" in msg
+        or "[metal::malloc]" in msg  # MLX's allocator
     )
 
 
