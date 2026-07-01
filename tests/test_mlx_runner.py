@@ -190,3 +190,15 @@ def test_hybrid_reports_fixed_recurrent_state_per_row(hybrid):
     conv = 3 * 128 * 4
     assert hybrid.row_state_bytes == 2 * (delta + conv)
     assert hybrid.kv_bytes_per_token == 2 * 2 * 2 * 16 * 4  # the 2 full-attention layers
+
+
+def test_hybrid_chunked_prefill_matches_alone(hybrid):
+    # The longest prompt spans three prefill chunks of 3, so the recurrent caches' lengths have
+    # to count down across chunks (mlx-lm's advance) for the shorter rows' pads to stay masked.
+    chunked = MLXModelRunner(hybrid.model, eos_ids=frozenset({0}), prefill_step=3)
+    ref = [alone(hybrid, p, f) for p, f in zip(PROMPTS, FORCED, strict=True)]
+    state, logits = chunked.prefill(PROMPTS)
+    steps = [logits, chunked.decode(state, [f[0] for f in FORCED])]
+    for step, got in enumerate(steps):
+        for row in range(len(PROMPTS)):
+            assert_close(got[row], ref[row][step])
