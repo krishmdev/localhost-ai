@@ -46,3 +46,55 @@ def test_settings_reject_nonsense():
         Settings(n_min=0)
     with pytest.raises(ValidationError):
         Settings(mem_reserve=1.5)
+
+
+class FakeMx:
+    """The four mlx.core calls MlxProbe makes."""
+
+    def __init__(self, active, cache, max_ws):
+        self.active, self.cache, self.max_ws = active, cache, max_ws
+
+    def device_info(self):
+        return {"max_recommended_working_set_size": self.max_ws}
+
+    def get_active_memory(self):
+        return self.active
+
+    def get_cache_memory(self):
+        return self.cache
+
+
+def test_mlx_probe_limit_is_recommended_working_set_when_os_has_room(monkeypatch):
+    from types import SimpleNamespace
+
+    import localhost_ai.memory as memory
+
+    monkeypatch.setattr(memory.psutil, "virtual_memory",
+                        lambda: SimpleNamespace(available=8 * 2**30))
+    s = memory.MlxProbe(FakeMx(active=2 * 2**30, cache=2**30, max_ws=10 * 2**30)).snapshot()
+    assert (s.used, s.limit, s.headroom) == (2 * 2**30, 10 * 2**30, 8 * 2**30)
+    assert s.source.startswith("mlx(")
+
+
+def test_mlx_probe_limit_shrinks_with_os_available(monkeypatch):
+    from types import SimpleNamespace
+
+    import localhost_ai.memory as memory
+
+    # other processes hold most of RAM: the limit is what we hold, our reusable cached
+    # buffers, and what the OS could still hand out
+    monkeypatch.setattr(memory.psutil, "virtual_memory",
+                        lambda: SimpleNamespace(available=2**30))
+    s = memory.MlxProbe(FakeMx(active=3 * 2**30, cache=2**29, max_ws=10 * 2**30)).snapshot()
+    assert s.limit == 3 * 2**30 + 2**30 + 2**29
+    assert s.headroom == 2**30 + 2**29
+
+
+def test_probe_for_picks_mlx_by_backend(monkeypatch):
+    import localhost_ai.memory as memory
+
+    monkeypatch.setattr(memory, "MlxProbe", lambda: FakeProbe(limit=1, used=0))
+    assert memory.probe_for("mps", backend="mlx").name == "fake"
+    assert isinstance(memory.probe_for("cpu"), CpuProbe)
+    wrapped = memory.probe_for("mps", budget=2**30, backend="mlx")
+    assert isinstance(wrapped, BudgetProbe) and wrapped.name == "fake+budget"

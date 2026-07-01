@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import psutil
 
@@ -88,6 +88,29 @@ class MpsProbe:
         return _snap(used, limit, "mps(min(recommended_max, used+os_available))")
 
 
+class MlxProbe:
+    """Apple silicon through MLX, which has its own allocator, so torch.mps sees none of it.
+    Same shape as MpsProbe: `used` is MLX's active memory (weights plus live arrays), buffers MLX
+    has cached for reuse count as ours, and the limit is the smaller of Metal's recommended
+    working set and what we hold plus what the OS could still give us."""
+
+    name = "mlx"
+
+    def __init__(self, mx: Any = None) -> None:
+        if mx is None:
+            import mlx.core as mx
+        self._mx = mx
+        info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
+        self._max = int(info["max_recommended_working_set_size"])
+
+    def snapshot(self) -> MemSnapshot:
+        used = int(self._mx.get_active_memory())
+        cached = int(self._mx.get_cache_memory())
+        available = psutil.virtual_memory().available
+        limit = min(self._max, used + available + cached)
+        return _snap(used, limit, "mlx(min(recommended_max, used+os_available))")
+
+
 class CpuProbe:
     """cgroup v2 limits when running in a container, psutil otherwise."""
 
@@ -155,9 +178,11 @@ class FakeProbe:
         return _snap(self.used, self.limit, "fake")
 
 
-def probe_for(device_kind: str, budget: int = 0) -> MemoryProbe:
+def probe_for(device_kind: str, budget: int = 0, backend: str = "torch") -> MemoryProbe:
     inner: MemoryProbe
-    if device_kind == "cuda":
+    if backend == "mlx":
+        inner = MlxProbe()
+    elif device_kind == "cuda":
         inner = CudaProbe()
     elif device_kind == "mps":
         inner = MpsProbe()
