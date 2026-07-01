@@ -14,7 +14,7 @@ flowchart LR
       sch[Scheduler]
       ctl[AIMDController]
       probe[MemoryProbe]
-      run[HFModelRunner + kv.py]
+      run[HFModelRunner + kv.py, or MLXModelRunner]
     end
   end
   sdk --> api
@@ -77,6 +77,7 @@ layers that already appended back to the old length.
 |---|---|---|---|
 | CUDA | total - headroom | `mem_get_info` total | driver free + (reserved - allocated) in PyTorch's cache |
 | MPS | `current_allocated_memory` | min(`recommended_max_memory`, used + OS available + cached driver blocks) | limit - used |
+| MLX (`backend: mlx` presets) | `mx.get_active_memory()` | min(Metal `max_recommended_working_set_size`, used + OS available + `mx.get_cache_memory()`) | limit - used |
 | CPU in a container | cgroup v2 `memory.current - inactive_file` | `memory.max` | limit - used |
 | CPU on a host | psutil total - available | psutil total | available |
 
@@ -86,6 +87,51 @@ about 12 GiB. The benchmark preflight records the probe and host swap before eve
 
 NVML GPU utilization is reported only on NVIDIA. On MPS and CPU the utilization signal is
 `lhai_engine_busy_ratio`, the share of wall time the compute thread spends in prefill and decode.
+
+## MLX backend (`engine/mlx_runner.py`)
+
+PyTorch on MPS has no working 4-bit path here. bitsandbytes needs CUDA. With torchao 0.18 and
+torch 2.14 on SmolLM2-135M, `Int4WeightOnlyConfig` needs a CUDA kernel library,
+`Int8WeightOnlyConfig` ran but generated only end-of-text, and `IntxWeightOnlyConfig` (int4) was
+slower than fp16, used more memory and answered wrongly.
+Presets with `backend: mlx` load a pre-quantized mlx-community checkpoint with mlx-lm instead,
+and `MLXModelRunner` gives the scheduler the same five operations as `HFModelRunner`:
+
+- **prefill**: every prompt except its last token runs right-padded through mlx-lm's batch
+  caches, with per-row lengths so padding is masked. `finalize` then rolls each row so the batch
+  is left-padded. The last tokens run as one decode step, so every row's logits come from the
+  same position.
+- **merge / select**: each layer cache's `extend` and `filter`. `filter` also trims columns that
+  are padding in every row.
+- Logits come back as CPU float32 torch tensors, so sampling (and seeded sampling) is shared.
+
+The caches are built from mlx-lm's public cache classes (`batch_cache`), not from its private
+batch-generator helper. That helper, and `ArraysCache.merge` of empty caches, give recurrent
+layers a zero `left_padding`, and `ArraysCache.make_mask` checks that before the prefill
+lengths. For Qwen3.5 (gated-delta linear attention in 3 of every 4 layers) that fed the pad
+tokens after each shorter prompt into its recurrent state. `tests/test_mlx_runner.py` builds a
+tiny random Qwen3.5 and checks batched against one-at-a-time logits, which catches it.
+
+Differences from the torch path:
+
+- **No crop after a failed step.** Recurrent state has no history to cut back to. If a forward
+  pass fails, the batch is marked lost and the next decode/merge/select raises `CacheLost`, a
+  `MemoryError`. The scheduler reads that as an OOM, drops the batch and recomputes every row.
+- **Fixed per-row state.** Linear-attention layers hold a recurrent state per row that doesn't
+  grow with length. `row_state_bytes` is measured from the live cache at load, and the scheduler
+  adds it (converted to KV-token equivalents) to every row in the KV ceiling and the admission
+  budget.
+- **KV per token is measured, not computed from the config.** It's read off the live cache
+  after warm-up. Sliding-window layers are counted as if they never wrap, which overstates long
+  rows, and layers that reuse another layer's KV are not counted twice.
+- **Allocation granularity.** mlx-lm grows KV buffers in 256-token steps, so the scheduler's
+  padded-token count slightly understates what is allocated. The MLX probe reads the real
+  number.
+- **OOM shows up late.** MLX raises `[metal::malloc]` only for a single buffer larger than
+  Metal allows. Running out of unified memory usually means swapping first, so the probe
+  watermarks and the KV ceiling do the protecting, not the exception path.
+
+mlx-lm is pinned exactly (`mlx-lm==0.31.3`) because the batch cache classes are internals.
 
 ## Names for latency
 
