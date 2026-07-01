@@ -3,7 +3,7 @@ alone, including rows that join mid-stream. Runs on the real 4-bit checkpoints, 
 mlx extra and the pinned weights; presets that aren't downloaded are skipped.
 
     uv run pytest -q -m mlx_model
-    LHAI_MLX_PRESETS=qwen3.5-4b-mlx4 uv run pytest -q -m mlx_model"""
+    LHAI_MLX_PRESETS=qwen3.5-9b-mlx4,gemma-4-e4b-mlx4 uv run pytest -q -m mlx_model"""
 
 import os
 
