@@ -202,3 +202,68 @@ def test_hybrid_chunked_prefill_matches_alone(hybrid):
     for step, got in enumerate(steps):
         for row in range(len(PROMPTS)):
             assert_close(got[row], ref[row][step])
+
+
+def tiny_gemma4():
+    """Gemma 4's text stack: sliding-window layers (BatchRotatingKVCache) with a full-attention
+    layer every third, and the last two layers reuse earlier layers' KV (no cache of their own).
+    The window is 4 tokens, so the longest prompt and the decode steps both wrap it."""
+    from mlx_lm.models import gemma4_text
+
+    mx.random.seed(0)
+    args = gemma4_text.ModelArgs(hidden_size=64, num_hidden_layers=6, intermediate_size=128,
+                                 num_attention_heads=4, head_dim=16, global_head_dim=32,
+                                 num_key_value_heads=2, num_global_key_value_heads=2,
+                                 num_kv_shared_layers=2, hidden_size_per_layer_input=8,
+                                 vocab_size=VOCAB, vocab_size_per_layer_input=VOCAB,
+                                 sliding_window=4, sliding_window_pattern=3,
+                                 use_double_wide_mlp=False)
+    model = gemma4_text.Model(args)
+    mx.eval(model.parameters())
+    return model
+
+
+@pytest.fixture(scope="module")
+def windowed():
+    return MLXModelRunner(tiny_gemma4(), eos_ids=frozenset({0}))
+
+
+def test_windowed_caches_and_sizes(windowed):
+    from mlx_lm.models.cache import BatchKVCache, BatchRotatingKVCache
+
+    from localhost_ai.engine.mlx_runner import batch_cache
+
+    cache = batch_cache(windowed.model, 2)
+    assert [type(c) for c in cache] == [BatchRotatingKVCache] * 2 + [BatchKVCache,
+                                                                      BatchRotatingKVCache]
+    # 3 sliding layers (2 kv heads x 16) + 1 full layer (2 kv heads x 32), K and V, fp32; the
+    # two shared layers add nothing
+    assert windowed.kv_bytes_per_token == 3 * 2 * 2 * 16 * 4 + 2 * 2 * 32 * 4
+    assert windowed.row_state_bytes == 0
+
+
+def test_windowed_batch_past_the_window_matches_alone(windowed):
+    ref = [alone(windowed, p, f) for p, f in zip(PROMPTS, FORCED, strict=True)]
+    state, logits = windowed.prefill(PROMPTS)
+    steps = [logits]
+    for i in range(len(FORCED[0])):
+        steps.append(windowed.decode(state, [f[i] for f in FORCED]))
+    for step, got in enumerate(steps):
+        for row in range(len(PROMPTS)):
+            assert_close(got[row], ref[row][step])
+
+
+def test_windowed_join_and_select_match_alone(windowed):
+    ref = [alone(windowed, p, f) for p, f in zip(PROMPTS, FORCED, strict=True)]
+    first, _ = windowed.prefill(PROMPTS[:2])
+    for i in range(2):
+        windowed.decode(first, [FORCED[0][i], FORCED[1][i]])
+    late, _ = windowed.prefill(PROMPTS[2:])
+    merged = windowed.merge(first, late)
+    got = windowed.decode(merged, [FORCED[0][2], FORCED[1][2], FORCED[2][0], FORCED[3][0]])
+    for row, step in enumerate([3, 3, 1, 1]):
+        assert_close(got[row], ref[row][step])
+    kept = windowed.select(merged, [1, 2])
+    got = windowed.decode(kept, [FORCED[1][3], FORCED[2][1]])
+    assert_close(got[0], ref[1][4])
+    assert_close(got[1], ref[2][2])
