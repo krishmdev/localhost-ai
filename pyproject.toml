@@ -74,8 +74,11 @@ explicit = true
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-markers = ["model: needs the pinned SmolLM2 weights in .models/ (run `make models` first)"]
-addopts = "-m 'not model'"
+markers = [
+    "model: needs the pinned SmolLM2 weights in .models/ (run `make models` first)",
+    "mlx_model: needs the mlx extra and pinned MLX weights (LHAI_MODEL=<preset> lhai models pull)",
+]
+addopts = "-m 'not model and not mlx_model'"
 filterwarnings = ["ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning"]
 
 [tool.ruff]

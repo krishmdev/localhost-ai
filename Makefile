@@ -5,11 +5,16 @@ PORT ?= 8000
 LHAI_OFFLINE_RUN ?=
 LHAI_LEASE ?=
 
-.PHONY: setup models test test-model lint serve demo offline-check up down bench report sim
+.PHONY: setup setup-mlx models test test-model test-mlx lint serve demo offline-check up down bench report sim
 
 setup:  ## install locked deps (CPU/MPS torch) and fetch the pinned model
 	uv sync --frozen --extra cpu --extra dev
 	$(MAKE) models
+
+setup-mlx:  ## apple silicon: also install mlx and fetch the 4-bit MLX preset
+	uv sync --frozen --extra cpu --extra dev --extra mlx
+	$(MAKE) models
+	LHAI_MODEL=qwen2.5-0.5b-mlx4 uv run lhai models pull
 
 models:  ## download pinned revisions into .models/ and check sha256 against models.lock
 	uv run lhai models pull
@@ -19,6 +24,9 @@ test:
 
 test-model:  ## batched-vs-sequential equivalence on the real model (CPU, fp32)
 	uv run pytest -q -m model
+
+test-mlx:  ## batched-vs-sequential equivalence on the 4-bit MLX checkpoints (apple silicon)
+	uv run pytest -q -m mlx_model
 
 lint:
 	uv run ruff check .
