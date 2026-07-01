@@ -28,6 +28,11 @@ dependencies = [
 cpu = ["torch==2.14.0"]
 cu126 = ["torch==2.14.0"]
 cuda = ["bitsandbytes==0.50.2", "accelerate==1.15.0", "nvidia-ml-py==13.610.43"]
+# Apple silicon: 4/8-bit models through MLX instead of PyTorch (models.yaml `backend: mlx`)
+mlx = [
+    "mlx==0.32.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-lm==0.31.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
