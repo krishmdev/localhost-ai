@@ -36,3 +36,12 @@ models:
     quantization: mlx4
     chat_template_kwargs: {enable_thinking: false}
     max_new_tokens: 256
+  # Gemma 4 E4B: sliding-window layers (512) with a full-attention layer every sixth, and the
+  # last 18 layers reuse earlier layers' KV. Text only here, like the Qwen3.5 preset.
+  gemma-4-e4b-mlx4:
+    repo: mlx-community/gemma-4-e4b-it-4bit
+    revision: 475b9088d29754a3379866cf5aeb6b41acd313c2
+    license: gemma
+    backend: mlx
+    quantization: mlx4
+    max_new_tokens: 256
