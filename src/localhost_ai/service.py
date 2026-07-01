@@ -26,6 +26,9 @@ class ModelParts:
     encode_chat: Callable[[list[dict[str, str]]], list[int]]
     info: dict[str, str]
     default_max_tokens: int = 256
+    # Memory probe for this model's backend (an MLX model needs MLX's allocator stats, not
+    # torch.mps's). None means the service-wide probe.
+    probe: MemoryProbe | None = None
 
 
 def aimd_config(s: Settings) -> AIMDConfig:
@@ -60,8 +63,9 @@ class Service:
 
     def _build_engine(self, controller: Controller) -> AsyncEngine:
         s = self.settings
+        probe = self.parts.probe if self.parts.probe is not None else self.probe
         sched = Scheduler(
-            self.parts.runner, self.parts.tokenizer, controller, probe=self.probe,
+            self.parts.runner, self.parts.tokenizer, controller, probe=probe,
             cfg=SchedulerConfig(max_queue=s.max_queue,
                                 max_prefill_tokens_per_step=s.max_prefill_tokens_per_step,
                                 max_context=s.max_context,
@@ -133,6 +137,7 @@ class Service:
 
 def _free_device_cache() -> None:
     import gc
+    import sys
 
     import torch
 
@@ -141,6 +146,8 @@ def _free_device_cache() -> None:
         torch.cuda.empty_cache()
     if torch.backends.mps.is_available():
         torch.mps.empty_cache()
+    if "mlx.core" in sys.modules:  # only if an MLX model was ever loaded
+        sys.modules["mlx.core"].clear_cache()
 
 
 def build_from_settings(s: Settings) -> Service:
@@ -151,19 +158,26 @@ def build_from_settings(s: Settings) -> Service:
 
     registry = Registry(s.models_file)
     dev = device.configure(s.device, s.dtype, s.threads)
+    probes: dict[str, MemoryProbe] = {}
+
+    def probe(backend: str) -> MemoryProbe:
+        if backend not in probes:
+            probes[backend] = probe_for(dev.kind, s.mem_limit_bytes, backend)
+        return probes[backend]
 
     def loader(name: str) -> ModelParts:
         spec = registry.get(name)
         m = load(spec, dev, s.models_dir, s.quantization, s.dtype)
         return ModelParts(
             name=spec.name, runner=m.runner, tokenizer=m.tokenizer, encode_chat=m.encode_chat,
-            default_max_tokens=spec.max_new_tokens,
+            default_max_tokens=spec.max_new_tokens, probe=probe(spec.backend),
             info={"model": spec.name, "repo": spec.repo, "revision": spec.revision,
-                  "device": dev.kind, "dtype": str(m.dtype).removeprefix("torch."),
-                  "quant": s.quantization, "threads": str(dev.threads),
+                  "backend": spec.backend,
+                  "device": "metal" if spec.backend == "mlx" else dev.kind,
+                  "dtype": m.dtype_name, "quant": m.quant, "threads": str(dev.threads),
                   "kv_bytes_per_token": str(m.runner.kv_bytes_per_token)},
         )
 
     parts = loader(s.model)
-    return Service(settings=s, parts=parts, probe=probe_for(dev.kind, s.mem_limit_bytes),
-                   metrics=EngineMetrics(), model_names=list(registry.specs), loader=loader)
+    return Service(settings=s, parts=parts, probe=parts.probe, metrics=EngineMetrics(),
+                   model_names=list(registry.specs), loader=loader)

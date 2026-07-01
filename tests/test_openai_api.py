@@ -188,3 +188,25 @@ def test_server_recovers_after_double_swap_failure():
         r = c.post("/v1/admin/models/load", json={"model": "fake-model"})
         assert r.status_code == 200 and r.json()["model"] == "fake-model"
         assert c.get("/readyz").status_code == 200
+
+
+def test_swap_uses_the_new_models_memory_probe():
+    # An MLX model's memory is invisible to torch.mps, so a swap between a torch and an MLX
+    # preset has to switch the probe the scheduler reads along with the runner.
+    from dataclasses import replace
+
+    from localhost_ai.memory import FakeProbe
+
+    svc = fake_service()
+    service_probe = svc.probe
+    assert svc.engine.scheduler.probe is service_probe  # parts.probe None: the service's
+    mlx_probe = FakeProbe(limit=1 << 32, used=1 << 30)
+    mlx_parts = replace(svc.parts, name="fake-mlx", probe=mlx_probe,
+                        info={**svc.parts.info, "model": "fake-mlx", "backend": "mlx"})
+    svc.model_names = ["fake-model", "fake-mlx"]
+    svc.loader = lambda name: mlx_parts
+    with TestClient(create_app(svc)) as c:
+        r = c.post("/v1/admin/models/load", json={"model": "fake-mlx"})
+        assert r.status_code == 200
+        assert svc.engine.scheduler.probe is mlx_probe
+        assert svc.engine.scheduler.mem.limit == 1 << 32
