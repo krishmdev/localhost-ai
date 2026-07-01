@@ -175,7 +175,8 @@ def build_from_settings(s: Settings) -> Service:
                   "backend": spec.backend,
                   "device": "metal" if spec.backend == "mlx" else dev.kind,
                   "dtype": m.dtype_name, "quant": m.quant, "threads": str(dev.threads),
-                  "kv_bytes_per_token": str(m.runner.kv_bytes_per_token)},
+                  "kv_bytes_per_token": str(m.runner.kv_bytes_per_token),
+                  "row_state_bytes": str(getattr(m.runner, "row_state_bytes", 0))},
         )
 
     parts = loader(s.model)
