@@ -287,3 +287,25 @@ def test_one_token_head_with_padding(model, request):
     for i in range(2):
         for row in range(2):
             assert_close(got[i][row], ref[row][i])
+
+
+def test_row_bytes_follows_the_cache_layout(runner, hybrid, windowed):
+    # KV buffers grow in 256-token steps, so a 5-token row already holds 256 tokens of KV
+    assert runner.row_bytes(5) == runner.row_bytes(256) == 256 * runner.kv_bytes_per_token
+    assert runner.row_bytes(257) == 512 * runner.kv_bytes_per_token
+    # recurrent state is a fixed cost on top
+    assert hybrid.row_bytes(5) == 256 * hybrid.kv_bytes_per_token + hybrid.row_state_bytes
+    # sliding-window layers stop at the window (4 tokens here); only the full layer grows
+    sliding, full = 3 * 2 * 2 * 16 * 4, 2 * 2 * 32 * 4
+    assert windowed.row_bytes(5) == 4 * sliding + 256 * full
+    assert windowed.row_bytes(2000) == 4 * sliding + 2048 * full
+
+
+@pytest.mark.parametrize("model", ["llama", "hybrid", "windowed"])
+def test_kv_bytes_reads_the_live_cache(model, request):
+    r = request.getfixturevalue({"llama": "runner", "hybrid": "hybrid",
+                                 "windowed": "windowed"}[model])
+    state, _ = r.prefill(PROMPTS)
+    assert r.kv_bytes(state) == len(PROMPTS) * r.row_bytes(max(map(len, PROMPTS)))
+    kept = r.select(state, [1, 2])
+    assert r.kv_bytes(kept) <= 2 * r.row_bytes(max(map(len, PROMPTS)))

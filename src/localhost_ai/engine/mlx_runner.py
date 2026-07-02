@@ -91,6 +91,19 @@ def kv_bytes_per_token(cache: list[Any]) -> int:
     return total
 
 
+def kv_layers(cache: list[Any]) -> list[tuple[int, int | None, int]]:
+    """Per attention layer with a cache of its own: (bytes per token per row, window or None
+    for full attention, allocation step). Read off a live cache like kv_bytes_per_token."""
+    out = []
+    for c in _leaves(cache):
+        k, v = getattr(c, "keys", None), getattr(c, "values", None)
+        if k is None or v is None:
+            continue
+        per = k.shape[1] * k.shape[3] * k.itemsize + v.shape[1] * v.shape[3] * v.itemsize
+        out.append((per, getattr(c, "max_size", None), getattr(c, "step", 1)))
+    return out
+
+
 def row_state_bytes(cache: list[Any], rows: int) -> int:
     """Per-row bytes held by recurrent layers (conv and SSM/delta-rule state), 0 for pure
     attention models."""
@@ -111,6 +124,7 @@ class MLXModelRunner:
         self.decode(state, logits.argmax(-1).tolist())
         self.kv_bytes_per_token = kv_bytes_per_token(state.cache)
         self.row_state_bytes = row_state_bytes(state.cache, 2)
+        self._kv_layers = kv_layers(state.cache)
         del state
         mx.clear_cache()
 
@@ -174,6 +188,22 @@ class MLXModelRunner:
         for c in state.cache:
             c.filter(idx)
         return MLXBatch(state.cache, [state.lengths[i] for i in keep])
+
+    def row_bytes(self, tokens: int) -> int:
+        """What one row of a batch padded to `tokens` holds: full-attention KV for every token,
+        sliding-window KV for at most the window, both rounded up to mlx-lm's allocation step
+        (256 tokens), plus the fixed recurrent state."""
+        total = self.row_state_bytes
+        for per, window, step in self._kv_layers:
+            alloc = -(-max(1, tokens) // step) * step
+            total += per * (alloc if window is None else min(alloc, window))
+        return total
+
+    def kv_bytes(self, state: MLXBatch) -> int:
+        """Bytes the batch's caches hold right now, read off the arrays (allocated KV buffers
+        and recurrent state). After `select` trims padding columns the KV arrays are views,
+        so this can be a little below what is still allocated until the buffer is replaced."""
+        return sum(c.nbytes for c in _leaves(state.cache) if hasattr(c, "nbytes"))
 
     def padded_tokens(self, state: MLXBatch) -> int:
         # filter trims columns that are padding in every row, so the width is the longest row
