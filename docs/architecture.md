@@ -66,6 +66,9 @@ layers that already appended back to the old length.
   is admitted again, prompt plus generated tokens are prefilled, so the output is the same as an
   uninterrupted run. `tests/test_hf_equivalence.py` checks this on the real model.
 - An OOM in merge or select drops the whole batch's KV and requeues every row for recompute.
+  So does any decode OOM on the MLX backend (below). The rebuilt batch is capped at one row
+  fewer than before, and admission holds at that size until a row finishes. Without the cap, a
+  fixed limit re-admitted the same batch into the same OOM forever.
 - The controller halves L the moment an OOM is reported (at most once per interval) and blocks
   increases for 3 intervals.
 - In a container the kernel may OOM-kill the process before PyTorch raises anything. That's what
@@ -124,19 +127,35 @@ Differences from the torch path:
 - **No crop after a failed step.** Recurrent state has no history to cut back to. If a forward
   pass fails, the batch is marked lost and the next decode/merge/select raises `CacheLost`, a
   `MemoryError`. The scheduler reads that as an OOM, drops the batch and recomputes every row.
-- **Fixed per-row state.** Linear-attention layers hold a recurrent state per row that doesn't
-  grow with length. `row_state_bytes` is measured from the live cache at load, and the scheduler
-  adds it (converted to KV-token equivalents) to every row in the KV ceiling and the admission
-  budget.
-- **KV per token is measured, not computed from the config.** It's read off the live cache
-  after warm-up. Sliding-window layers are counted as if they never wrap, which overstates long
-  rows, and layers that reuse another layer's KV are not counted twice.
-- **Allocation granularity.** mlx-lm grows KV buffers in 256-token steps, so the scheduler's
-  padded-token count slightly understates what is allocated. The MLX probe reads the real
-  number.
-- **OOM shows up late.** MLX raises `[metal::malloc]` only for a single buffer larger than
-  Metal allows. Running out of unified memory usually means swapping first, so the probe
-  watermarks and the KV ceiling do the protecting, not the exception path.
+- **Recompute costs the whole batch.** Because nothing can be cut back, one OOM re-prefills
+  every running row, where the torch path re-prefills one. Snapshotting the caches before each
+  step to allow a one-row preempt isn't worth it: mlx-lm updates KV buffers in place and the
+  recurrent state is replaced each step, so a snapshot would mean copying the state every step.
+- **Memory is priced per cache layout.** The KV ceiling and the admission budget work in bytes.
+  The torch runner prices a row as tokens x `kv_bytes_per_token`. The MLX runner reads its layer
+  layout off the live cache at load and prices a row padded to T tokens as
+  `full x ceil256(T) + sliding x min(ceil256(T), window) + row_state`: full-attention layers
+  grow with every token, sliding-window layers stop at their window, KV buffers are allocated in
+  256-token steps, and linear-attention layers hold a fixed recurrent state per row. Layers that
+  reuse another layer's KV (Gemma 4's last 18) have no cache and cost nothing. For Gemma 4 E4B at
+  2048 tokens a flat per-token count would overstate a row about 2x; for a 50-token row it would
+  understate it about 5x.
+- **KV in use is read off the arrays.** The ceiling adds back the bytes the batch already holds,
+  summed from the cache arrays' `nbytes` (`lhai_kv_cache_bytes`). After `select` trims padding
+  columns the arrays are views of the old buffer, so the figure can sit a little below what is
+  allocated until the next step reallocates. The probe reads the allocator either way.
+- **OOM shows up late.** MLX raises `[metal::malloc] Attempting to allocate ...` for a single
+  buffer larger than Metal allows, `[metal::malloc] Resource limit (499000) exceeded.` for too
+  many buffers, and `[malloc] Unable to allocate N bytes.` when Metal can't hand out a buffer.
+  All three count as OOM. Running out of unified memory usually means swapping first, so the
+  probe watermarks and the KV ceiling do the protecting, not the exception path. Whether a real
+  exhaustion surfaces as that last error or as a failed command buffer hasn't been tried here.
+- **Wired memory.** On load the wired limit is raised to Metal's recommended working set, as
+  mlx-lm's own generate does, so a large model's weights aren't paged out between steps. It's a
+  cap, not a reservation.
+- **Hot-swap frees first.** The old runner and tokenizer are dropped and MLX's buffer cache is
+  cleared before the next model loads, after waiting for the compute thread to finish its step.
+  Otherwise both sets of weights are resident during the load.
 
 mlx-lm is pinned exactly (`mlx-lm==0.31.3`) because the batch cache classes are internals.
 
