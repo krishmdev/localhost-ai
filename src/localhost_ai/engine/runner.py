@@ -7,6 +7,7 @@ import torch
 from transformers import DynamicCache
 
 from . import kv
+from .prefix import PrefixCache, PrefixEntry, prefill_with_prefixes
 
 
 class ModelRunner(Protocol):
@@ -52,27 +53,55 @@ class HFBatch:
 
 class HFModelRunner:
     def __init__(self, model: Any, pad_id: int, eos_ids: frozenset[int],
-                 device: torch.device, dtype: torch.dtype) -> None:
+                 device: torch.device, dtype: torch.dtype,
+                 prefix_cache: PrefixCache | None = None) -> None:
         self.model = model
         self.pad_id = pad_id
         self.eos_ids = eos_ids
         self.device = device
         self.kv_bytes_per_token = kv_bytes_per_token(model.config, dtype)
+        self.prefix: PrefixCache | None = prefix_cache
+
+    def prefill(self, seqs: list[list[int]]) -> tuple[HFBatch, torch.Tensor]:
+        if self.prefix is None:
+            return self._prefill(seqs, None)
+        return prefill_with_prefixes(self, self.prefix, seqs)
 
     @torch.inference_mode()
-    def prefill(self, seqs: list[list[int]]) -> tuple[HFBatch, torch.Tensor]:
-        t = max(len(s) for s in seqs)
+    def _build_prefix(self, tokens: list[int]) -> tuple[list[tuple[torch.Tensor, ...]], int]:
+        ids = torch.tensor([tokens], dtype=torch.long, device=self.device)
+        out = self.model(input_ids=ids, past_key_values=DynamicCache(), use_cache=True,
+                         logits_to_keep=1)
+        return kv.layers(out.past_key_values), kv.nbytes(out.past_key_values)
+
+    @torch.inference_mode()
+    def _prefill(self, seqs: list[list[int]],
+                 entry: PrefixEntry | None) -> tuple[HFBatch, torch.Tensor]:
+        """Left-padded prefill. With a cached prefix, each row's cache starts with the prefix's
+        KV and only the suffixes run, left-padded after the prefix: the mask then has a hole
+        of padding between prefix and suffix, which the attention mask and the cumsum position
+        ids handle the same way as leading padding."""
+        n = len(entry.tokens) if entry is not None else 0
+        tails = [s[n:] for s in seqs]
+        t = max(len(s) for s in tails)
         ids = torch.full((len(seqs), t), self.pad_id, dtype=torch.long)
         mask = torch.zeros((len(seqs), t), dtype=torch.long)
-        for i, s in enumerate(seqs):
+        for i, s in enumerate(tails):
             ids[i, t - len(s):] = torch.tensor(s, dtype=torch.long)
             mask[i, t - len(s):] = 1
         ids, mask = ids.to(self.device), mask.to(self.device)
+        cache = DynamicCache()
+        if entry is not None:
+            b = len(seqs)
+            cache = kv.build([(k.expand(b, -1, -1, -1), v.expand(b, -1, -1, -1))
+                              for k, v in entry.state])
+            mask = torch.cat([torch.ones((b, n), dtype=torch.long, device=mask.device), mask],
+                             dim=1)
         out = self.model(
             input_ids=ids,
             attention_mask=mask,
-            position_ids=kv.prefill_positions(mask),
-            past_key_values=DynamicCache(),
+            position_ids=kv.prefill_positions(mask)[:, n:],
+            past_key_values=cache,
             use_cache=True,
             logits_to_keep=1,
         )
@@ -109,6 +138,11 @@ class HFModelRunner:
 
     def padded_tokens(self, state: HFBatch) -> int:
         return int(state.mask.numel())
+
+    def drop_prefixes(self) -> int:
+        freed = self.prefix.clear() if self.prefix is not None else 0
+        self.release()
+        return freed
 
     def release(self) -> None:
         """Hand cached allocator blocks back after shedding rows, so the memory probe (and the
