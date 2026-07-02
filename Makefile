@@ -5,7 +5,7 @@ PORT ?= 8000
 LHAI_OFFLINE_RUN ?=
 LHAI_LEASE ?=
 
-.PHONY: setup setup-mlx models test test-model test-mlx lint serve demo offline-check up down bench report sim
+.PHONY: setup setup-mlx models test test-model test-mlx lint serve demo offline-check up down bench bench-mlx report sim
 
 setup:  ## install locked deps (CPU/MPS torch) and fetch the pinned model
 	uv sync --frozen --extra cpu --extra dev
@@ -49,6 +49,10 @@ down:
 
 bench:  ## every measurement in bench/RESULTS.md (prefix with LHAI_LEASE on a shared machine)
 	$(LHAI_LEASE) bench/all.sh
+	$(MAKE) report
+
+bench-mlx:  ## the mlx sections of bench/RESULTS.md (apple silicon, mlx extra)
+	$(LHAI_LEASE) bench/mlx.sh
 	$(MAKE) report
 
 report:
