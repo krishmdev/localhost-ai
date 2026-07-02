@@ -108,11 +108,17 @@ class Service:
                 await asyncio.sleep(0.1)
                 waited += 0.1
             controller = self.engine.controller
-            self.engine.stop()
-            self.engine.scheduler.fail_all("model is being replaced")
+            # wait for the compute thread to finish its step (a long prefill can take a while)
+            # so the old model is never running while the new one loads
+            await asyncio.to_thread(self.engine.stop, None)
+            sched = self.engine.scheduler
+            sched.fail_all("model is being replaced")
             # None after an earlier swap failed twice; then there is nothing to fall back to.
             old_name = self.parts.name if self.parts is not None else None
+            # Drop every reference to the old model before loading the next one; otherwise its
+            # weights stay alive through the load and peak memory holds both models.
             self.parts = None  # type: ignore[assignment]
+            sched.runner = sched.tokenizer = None
             _free_device_cache()
             try:
                 self.parts = await asyncio.to_thread(self.loader, name)

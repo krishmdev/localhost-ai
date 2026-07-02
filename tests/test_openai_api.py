@@ -212,6 +212,31 @@ def test_swap_uses_the_new_models_memory_probe():
         assert svc.engine.scheduler.mem.limit == 1 << 32
 
 
+def test_swap_frees_the_old_model_before_loading_the_new_one():
+    # Otherwise both models are resident during the load (9B -> Gemma doesn't fit in 16 GB).
+    import gc
+    import weakref
+    from dataclasses import replace
+
+    svc = fake_service()
+    old = weakref.ref(svc.parts.runner)
+    new_parts = replace(svc.parts, name="other", runner=FakeRunner(t0=0.002))
+    svc.model_names = ["fake-model", "other"]
+    seen = {}
+
+    def loader(name):
+        gc.collect()
+        seen["old_alive"] = old() is not None
+        return new_parts
+
+    svc.loader = loader
+    with TestClient(create_app(svc)) as c:
+        assert c.post("/v1/admin/models/load", json={"model": "other"}).status_code == 200
+        assert c.post("/v1/chat/completions",
+                      json={"messages": MSG, "max_tokens": 3}).status_code == 200
+    assert seen == {"old_alive": False}
+
+
 def test_engine_stop_waits_for_a_long_step():
     import threading
 
