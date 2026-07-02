@@ -62,6 +62,8 @@ class EngineMetrics:
         self.headroom = Gauge(p + "memory_headroom_ratio", "Headroom / limit", registry=r)
         self.kv_tokens = Gauge(p + "kv_cache_tokens", "Padded tokens held in the KV cache",
                                registry=r)
+        self.kv_bytes = Gauge(p + "kv_cache_bytes", "Bytes the batch cache holds (KV and "
+                              "recurrent state)", registry=r)
         self.kv_ceiling = Gauge(p + "kv_ceiling_rows", "Rows that fit in memory (estimate)",
                                 registry=r)
         self.busy = Gauge(p + "engine_busy_ratio", "Fraction of wall time spent computing",
@@ -117,6 +119,7 @@ class EngineMetrics:
         self.running.set(st["running"])
         self.limit.set(st["batch_limit"])
         self.kv_tokens.set(st["kv_tokens"])
+        self.kv_bytes.set(st["kv_bytes"])
         self.busy.set(st["busy_ratio"])
         if st["decode_step_p95_ms"] is not None:
             self.p95.set(st["decode_step_p95_ms"] / 1e3)

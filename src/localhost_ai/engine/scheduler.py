@@ -537,6 +537,7 @@ class Scheduler:
             "queued": len(self.waiting),
             "batch_limit": self.controller.limit,
             "kv_tokens": self.kv_tokens,
+            "kv_bytes": self._kv_at_tick,
             "kv_ceiling": self.kv_ceiling,
             "decode_step_p50_ms": ms(decode, 0.5),
             "decode_step_p95_ms": ms(decode, 0.95),
