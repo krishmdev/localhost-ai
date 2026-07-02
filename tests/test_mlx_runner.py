@@ -325,3 +325,52 @@ def test_kv_bytes_reads_the_live_cache(model, request):
     assert r.kv_bytes(state) == len(PROMPTS) * r.row_bytes(max(map(len, PROMPTS)))
     kept = r.select(state, [1, 2])
     assert r.kv_bytes(kept) <= 2 * r.row_bytes(max(map(len, PROMPTS)))
+
+
+SYSTEM = [40, 41, 42, 43, 44, 45, 46]  # a shared "system prompt", longer than Gemma's window
+SUFFIXES = [[50, 51, 52], [53], [54, 55, 56, 57, 58, 59], [60, 61]]
+
+
+@pytest.mark.parametrize("step", [3, 512])
+@pytest.mark.parametrize("model", ["llama", "hybrid", "windowed"])
+def test_prefix_cache_matches_alone(model, step, request):
+    from localhost_ai.engine.prefix import PrefixCache
+
+    base = request.getfixturevalue({"llama": "runner", "hybrid": "hybrid",
+                                    "windowed": "windowed"}[model])
+    pc = PrefixCache(budget_bytes=1 << 30, min_tokens=4)
+    r = MLXModelRunner(base.model, eos_ids=frozenset({0}), prefill_step=step, prefix_cache=pc)
+    prompts = [SYSTEM + s for s in SUFFIXES]
+    ref = [alone(base, p, f) for p, f in zip(prompts, FORCED, strict=True)]
+
+    # first batch: the second row finds the shared prefix with the first and stores it, so the
+    # batch is prefilled as two groups (no prefix / cached prefix) and merged back in order
+    state, logits = r.prefill(prompts)
+    assert list(pc.entries) == [tuple(SYSTEM)] and pc.misses == 1 and pc.hits == 3
+    steps = [logits] + [r.decode(state, [f[i] for f in FORCED]) for i in range(len(FORCED[0]))]
+    for i, got in enumerate(steps):
+        for row in range(len(prompts)):
+            assert_close(got[row], ref[row][i])
+
+    # a later batch hits the stored prefix for every row
+    state, logits = r.prefill(prompts[::-1])
+    assert pc.hits == 7 and pc.misses == 1
+    got = r.decode(state, [f[0] for f in FORCED[::-1]])
+    for row, orig in enumerate(range(len(prompts) - 1, -1, -1)):
+        assert_close(logits[row], ref[orig][0])
+        assert_close(got[row], ref[orig][1])
+
+
+def test_prefix_cache_budget_and_drop(runner):
+    from localhost_ai.engine.prefix import PrefixCache
+
+    pc = PrefixCache(budget_bytes=1 << 30, min_tokens=4)
+    r = MLXModelRunner(runner.model, eos_ids=frozenset({0}), prefix_cache=pc)
+    r.prefill([SYSTEM + s for s in SUFFIXES[:2]])
+    size = pc.nbytes
+    assert size > 0 and size == pc.entries[tuple(SYSTEM)].nbytes
+    assert r.drop_prefixes() == size and pc.nbytes == 0 and not pc.entries
+    small = PrefixCache(budget_bytes=size - 1, min_tokens=4)  # an entry that can't fit
+    r2 = MLXModelRunner(runner.model, eos_ids=frozenset({0}), prefix_cache=small)
+    r2.prefill([SYSTEM + s for s in SUFFIXES[:2]])
+    assert not small.entries and small.misses == 2

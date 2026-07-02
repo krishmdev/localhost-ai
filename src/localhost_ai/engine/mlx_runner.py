@@ -29,6 +29,8 @@ from mlx_lm.models.cache import (
     make_prompt_cache,
 )
 
+from .prefix import PrefixCache, PrefixEntry, prefill_with_prefixes
+
 
 class CacheLost(MemoryError):
     """The last forward pass failed after some layers had already advanced their caches. MLX
@@ -112,11 +114,20 @@ def row_state_bytes(cache: list[Any], rows: int) -> int:
     return total // max(1, rows)
 
 
+def _repeat(c: Any, rows: int) -> Any:
+    """A batch cache of `rows` copies of one single-sequence cache (a stored prefix)."""
+    if isinstance(c, CacheList):
+        return CacheList(*(_repeat(sub, rows) for sub in c.caches))
+    return type(c).merge([c] * rows)
+
+
 class MLXModelRunner:
-    def __init__(self, model: Any, eos_ids: frozenset[int], prefill_step: int = 512) -> None:
+    def __init__(self, model: Any, eos_ids: frozenset[int], prefill_step: int = 512,
+                 prefix_cache: PrefixCache | None = None) -> None:
         self.model = model
         self.eos_ids = eos_ids
         self.prefill_step = prefill_step
+        self.prefix: PrefixCache | None = None
         self.kv_bytes_per_token = 0
         self.row_state_bytes = 0
         # Measure on a real two-row cache (this also serves as the warmup).
@@ -127,6 +138,7 @@ class MLXModelRunner:
         self._kv_layers = kv_layers(state.cache)
         del state
         mx.clear_cache()
+        self.prefix = prefix_cache
 
     def _forward(self, cache: list[Any], tokens: list[int]) -> torch.Tensor:
         out = self.model(mx.array(tokens, dtype=mx.int32)[:, None], cache=cache)[:, -1, :]
@@ -135,12 +147,36 @@ class MLXModelRunner:
         return torch.from_numpy(np.array(out))
 
     def prefill(self, seqs: list[list[int]]) -> tuple[MLXBatch, torch.Tensor]:
+        if self.prefix is None:
+            return self._prefill(seqs, None)
+        return prefill_with_prefixes(self, self.prefix, seqs)
+
+    def _build_prefix(self, tokens: list[int]) -> tuple[list[Any], int]:
+        """Run a shared prefix alone through the model's own single-sequence caches."""
+        cache = make_prompt_cache(self.model)
+        ids = mx.array([tokens], dtype=mx.int32)
+        for i in range(0, len(tokens), self.prefill_step):
+            self.model(ids[:, i:i + self.prefill_step], cache=cache)
+            mx.eval([c.state for c in cache])
+        return cache, sum(c.nbytes for c in _leaves(cache))
+
+    def _prefill(self, seqs: list[list[int]],
+                 entry: PrefixEntry | None) -> tuple[MLXBatch, torch.Tensor]:
         """Everything but the last token of each prompt goes through the model right-padded;
         `finalize` then rolls each row so the batch ends up left-padded (mlx-lm's own batch
         generator does the same). The last tokens run as one decode step, so every row's logits
-        come from the same position."""
-        cache = batch_cache(self.model, len(seqs))
-        heads = [s[:-1] for s in seqs]
+        come from the same position.
+
+        With a cached prefix, every row's cache starts as a copy of the prefix's (mlx-lm's
+        batch `merge` of the single-sequence caches), and only the rest of each prompt is
+        prefilled, exactly as if the prefix had been the first prefill chunk."""
+        start = 0
+        if entry is None:
+            cache = batch_cache(self.model, len(seqs))
+        else:
+            start = len(entry.tokens)
+            cache = [_repeat(c, len(seqs)) for c in entry.state]
+        heads = [s[start:-1] for s in seqs]
         width = max(len(h) for h in heads)
         if width:
             lengths = [len(h) for h in heads]
@@ -211,3 +247,8 @@ class MLXModelRunner:
 
     def release(self) -> None:
         mx.clear_cache()
+
+    def drop_prefixes(self) -> int:
+        freed = self.prefix.clear() if self.prefix is not None else 0
+        mx.clear_cache()
+        return freed
