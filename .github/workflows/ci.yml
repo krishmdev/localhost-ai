@@ -15,6 +15,20 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest -q
 
+  mlx:
+    # The MLX runner, scheduler and loader tests on tiny in-process models. GitHub's macOS
+    # runners have no usable Metal device, so MLX runs on its CPU backend here.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.28"
+      - run: uv sync --frozen --extra cpu --extra dev --extra mlx
+      - run: uv run pytest -q tests/test_mlx_runner.py tests/test_mlx_scheduler.py tests/test_mlx_load.py
+        env:
+          LHAI_MLX_DEVICE: cpu
+
   offline-runtime:
     # Setup phase (network): pinned model + image. Runtime phase: a container with no network.
     runs-on: ubuntu-latest
