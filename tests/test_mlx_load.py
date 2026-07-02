@@ -73,6 +73,8 @@ def test_load_mlx_rejects_a_wrong_quantization_label(checkpoint):
         loader.load(spec(quantization="mlx8"), dev, checkpoint.parent)
 
 
+@pytest.mark.skipif(not mx.metal.is_available() or mx.default_device() != mx.gpu,
+                    reason="MlxProbe reads the Metal allocator")
 def test_mlx_probe_reads_the_allocator():
     probe = MlxProbe()
     before = probe.snapshot()
