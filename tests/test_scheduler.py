@@ -406,3 +406,24 @@ def test_transient_low_headroom_preserves_limit_but_gates_new_admission():
     drain(s)
     for r in [*running, waiting]:
         assert isinstance(done(r), DoneEvent)
+
+
+@pytest.mark.parametrize("controller", ["fixed", "aimd"])
+def test_lost_cache_rebuilds_a_smaller_batch(controller):
+    # MLX-style: a failed decode loses the whole batch cache, so every row is recomputed. The
+    # rebuilt batch has to be smaller and stay that way until a row finishes; otherwise a fixed
+    # limit re-admits the same batch and OOMs forever without decoding a token.
+    from fakes import LosingFakeRunner
+
+    runner = LosingFakeRunner(oom_at_rows=3)
+    ctl = FixedController(4) if controller == "fixed" else AIMDController(AIMDConfig(initial=4))
+    s = make(runner=runner, controller=ctl)
+    prompts = [[1, 2, 3], [4, 5], [6, 7, 8, 9], [10]]
+    rs = [req(p, SamplingParams(temperature=0.0, max_tokens=20)) for p in prompts]
+    for r in rs:
+        s.add(r)
+    steps = drain(s, max_steps=2000)
+    assert s.ooms <= 3, f"{s.ooms} OOMs, {s.preemptions} preemptions in {steps} steps"
+    for p, r in zip(prompts, rs, strict=True):
+        assert done(r).finish_reason == "length"
+        assert r.generated == reference(p, 20)

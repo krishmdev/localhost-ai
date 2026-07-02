@@ -16,7 +16,13 @@ prefill stalls in their inter-token latency; `max_prefill_tokens_per_step` bound
 On an out-of-memory error the newest row is preempted by recompute (vLLM style): its KV is
 dropped, it goes back to the front of the queue, and when it's admitted again the prompt plus
 the tokens generated so far are prefilled. Its sampler state is kept, so the output is the same
-as an uninterrupted run."""
+as an uninterrupted run.
+
+When the runner can't give back a consistent cache after the failure (the MLX runner: some
+layers may already have advanced, and recurrent state can't be cut back), selecting the
+surviving rows raises too, and every row is recomputed instead. The batch is then rebuilt with
+at least one row fewer and admission holds at that size until a row finishes. That costs a full
+re-prefill of every running row per OOM, against one row on the torch path."""
 
 from __future__ import annotations
 
@@ -96,6 +102,10 @@ class Scheduler:
         # each further OOM, down to 1) until a running row finishes. Without it, fixed mode, whose
         # limit never drops, retries the same prefill forever.
         self._prefill_cap: int | None = None
+        # After an OOM forced the whole batch to be recomputed (MLX can't drop just one row from a
+        # failed step), rebuild it with fewer rows and keep holding admission at that size until
+        # a row finishes. Without it, a fixed limit re-admits the same batch into the same OOM.
+        self._rebuild_hold = False
         self.ttfts: deque[tuple[float, float]] = deque()
         self.tokens: deque[tuple[float, int]] = deque()
         self.kv_ceiling: int | None = None
@@ -246,6 +256,10 @@ class Scheduler:
             if self.running:
                 return []
             self._hold_admission = False
+        if self._rebuild_hold:
+            # this admission rebuilds the batch (at most _prefill_cap rows); hold after it
+            self._rebuild_hold = False
+            self._hold_admission = True
         limit = self.controller.limit
         budget = self._kv_budget_tokens()
         cur_len = self.kv_tokens // len(self.running) if self.running else 0
@@ -349,6 +363,7 @@ class Scheduler:
         if len(keep) < len(self.running):
             self._hold_admission = False  # a row left, so there's room again
             self._prefill_cap = None
+            self._rebuild_hold = False
         if not keep:
             self.running, self.state = [], None
             return
@@ -367,10 +382,15 @@ class Scheduler:
             self.waiting.extendleft(reversed(reqs))
 
     def _reset_batch(self, reqs: list[Request]) -> None:
-        """Drop the whole running batch's KV and requeue its rows for recompute."""
+        """Drop the whole running batch's KV and requeue its rows for recompute. Every caller
+        got here through an OOM, so the batch is rebuilt with at least one row fewer."""
         self.state = None
         self.running = []
         alive = [r for r in reqs if r.finish_reason is None]
+        if alive:
+            cap = max(1, len(alive) - 1)
+            self._prefill_cap = cap if self._prefill_cap is None else min(cap, self._prefill_cap)
+            self._rebuild_hold = True
         for r in alive:
             r.preemptions += 1
             self.preemptions += 1

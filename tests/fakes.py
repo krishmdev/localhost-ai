@@ -142,3 +142,34 @@ def fake_service(runner: FakeRunner | None = None, probe=None, **settings):
     return Service(settings=Settings(**{**defaults, **settings}), parts=parts,
                    probe=probe or FakeProbe(limit=1 << 30, used=1 << 28),
                    metrics=EngineMetrics(), model_names=["fake-model"])
+
+
+class FakeCacheLost(MemoryError):
+    pass
+
+
+@dataclass
+class LosingFakeRunner(FakeRunner):
+    """Behaves like MLXModelRunner after a failed decode: the batch cache is gone, and every
+    later decode/select/merge on it raises a MemoryError, so the scheduler has to recompute the
+    whole batch. `oom_at_rows` makes any decode with that many rows fail."""
+
+    oom_at_rows: int | None = None
+
+    def decode(self, state: FakeState, tokens: list[int]):
+        if getattr(state, "lost", False):
+            raise FakeCacheLost("lost")
+        if self.oom_at_rows is not None and len(state.rows) >= self.oom_at_rows:
+            state.lost = True
+            raise RuntimeError("[malloc] Unable to allocate 1073741824 bytes.")
+        return super().decode(state, tokens)
+
+    def select(self, state: FakeState, keep: list[int]) -> FakeState:
+        if getattr(state, "lost", False):
+            raise FakeCacheLost("lost")
+        return super().select(state, keep)
+
+    def merge(self, a: FakeState, b: FakeState) -> FakeState:
+        if getattr(a, "lost", False) or getattr(b, "lost", False):
+            raise FakeCacheLost("lost")
+        return super().merge(a, b)
