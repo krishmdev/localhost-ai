@@ -95,6 +95,7 @@ class Scheduler:
         self.steps: deque[tuple[float, float, int]] = deque()  # (t, decode_s, batch)
         self.iters: deque[tuple[float, float]] = deque()  # (t, iteration_s)
         self._kv_at_tick = 0
+        self._prefix_at_tick = 0
         # After an OOM, don't admit anything new until a running row finishes; otherwise the
         # preempted row goes straight back in and hits the same OOM (thrash).
         self._hold_admission = False
@@ -176,6 +177,7 @@ class Scheduler:
             self.mem = self.probe.snapshot()
         kv_in_use = self.kv_bytes
         self._kv_at_tick = kv_in_use
+        self._prefix_at_tick = self.prefix_bytes
         self.kv_ceiling = None
         if self.mem is not None:
             self.kv_ceiling = kv_ceiling(self.mem, self.cfg.mem_reserve, kv_in_use,
@@ -184,6 +186,9 @@ class Scheduler:
                                              queued=len(self.waiting), mem=self.mem,
                                              kv_ceiling=self.kv_ceiling))
         self.last_decision = d
+        if d.shed:
+            # stored prefixes go before any running row does
+            self._drop_prefixes()
         if d.shed and len(self.running) > self.controller.limit:
             self._preempt(len(self.running) - self.controller.limit)
             self._release()
@@ -255,12 +260,26 @@ class Scheduler:
                 self._finish(self.running[i], "cancelled")
             self._keep([i for i, r in enumerate(self.running) if not r.cancelled])
 
+    @property
+    def prefix_bytes(self) -> int:
+        """Memory held by stored prompt prefixes (0 without a prefix cache)."""
+        pc = getattr(self.runner, "prefix", None)
+        return pc.nbytes if pc is not None else 0
+
+    def _drop_prefixes(self) -> None:
+        drop = getattr(self.runner, "drop_prefixes", None)
+        if drop is not None and self.prefix_bytes:
+            drop()
+
     def _kv_budget_bytes(self) -> int | None:
         """Cache memory the batch may hold, from the reading taken at the last tick: that
-        tick's headroom minus the reserve, plus the cache that was already held then."""
+        tick's headroom minus the reserve, plus the cache that was already held then, minus
+        any prefixes stored since (they took memory the tick's headroom still counts)."""
         if self.mem is None:
             return None
-        return int(self.mem.headroom - self.cfg.mem_reserve * self.mem.limit + self._kv_at_tick)
+        grown = max(0, self.prefix_bytes - self._prefix_at_tick)
+        return int(self.mem.headroom - self.cfg.mem_reserve * self.mem.limit + self._kv_at_tick
+                   - grown)
 
     def _admit(self) -> list[Request]:
         if self._hold_admission:
@@ -436,6 +455,7 @@ class Scheduler:
         self._requeue(victims)
 
     def _on_oom(self) -> None:
+        self._drop_prefixes()
         self.ooms += 1
         self.metrics.oom()
         self._hold_admission = True
@@ -538,6 +558,7 @@ class Scheduler:
             "batch_limit": self.controller.limit,
             "kv_tokens": self.kv_tokens,
             "kv_bytes": self._kv_at_tick,
+            **(pc.stats() if (pc := getattr(self.runner, "prefix", None)) is not None else {}),
             "kv_ceiling": self.kv_ceiling,
             "decode_step_p50_ms": ms(decode, 0.5),
             "decode_step_p95_ms": ms(decode, 0.95),

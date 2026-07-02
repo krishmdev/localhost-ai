@@ -451,3 +451,60 @@ def test_runner_row_bytes_and_live_kv_bytes_drive_the_budget():
     assert s.kv_bytes == 123_456
     assert s.kv_ceiling == (900_000 - 150_000 + 123_456) // 200_000
     drain(s)
+
+
+@dataclass
+class PrefixRunner(FakeRunner):
+    """A fake runner that owns a prefix cache (entries are added by hand in the tests)."""
+
+    prefix: object = None
+    dropped: int = 0
+
+    def drop_prefixes(self):
+        self.dropped += 1
+        return self.prefix.clear()
+
+
+def prefix_runner():
+    from localhost_ai.engine.prefix import PrefixCache
+
+    return PrefixRunner(prefix=PrefixCache(budget_bytes=1 << 30))
+
+
+def test_memory_pressure_drops_stored_prefixes_first():
+    r = prefix_runner()
+    r.prefix.add([1] * 40, "state", 30_000)
+    probe = FakeProbe(limit=1_000_000, used=100_000)
+    ctl = AIMDController(AIMDConfig(initial=6))
+    s = make(runner=r, controller=ctl, probe=probe, control_interval_s=0.0)
+    for i in range(6):
+        s.add(req([i + 1], SamplingParams(temperature=0.0, max_tokens=40)))
+    s.step()
+    assert s.stats()["prefix_bytes"] == 30_000
+    probe.used = 950_000  # below the low watermark
+    s.step()
+    assert ctl.last.shed and r.dropped == 1 and r.prefix.nbytes == 0
+    probe.used = 100_000
+    drain(s)
+
+
+def test_oom_drops_stored_prefixes():
+    r = prefix_runner()
+    r.oom_above_tokens = 60
+    r.prefix.add([1] * 40, "state", 30_000)
+    s = make(limit=4, runner=r)
+    for p in ([1, 2, 3, 4, 5], [6, 7, 8], [9, 10, 11, 12], [13, 14]):
+        s.add(req(p, SamplingParams(temperature=0.0, max_tokens=14)))
+    drain(s)
+    assert s.ooms >= 1 and r.dropped >= 1 and r.prefix.nbytes == 0
+
+
+def test_prefixes_stored_since_the_tick_come_out_of_the_admission_budget():
+    r = prefix_runner()
+    probe = FakeProbe(limit=200_000, used=100_000)  # 70 tokens of budget, as above
+    s = make(limit=16, runner=r, probe=probe)
+    r.prefix.add([1] * 40, "state", 30_000)  # stored after the last reading: 30 tokens' worth
+    for _ in range(8):
+        s.add(req([1] * 10, SamplingParams(temperature=0.0, max_tokens=10)))
+    s.step()
+    assert len(s.running) == 2  # 40 tokens of budget left, 15 per row
