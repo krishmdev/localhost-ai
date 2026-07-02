@@ -165,6 +165,10 @@ def test_backend_allocator_errors_count_as_oom():
     assert is_oom(RuntimeError("[metal::malloc] Attempting to allocate 274877906944 bytes which "
                                "is greater than the maximum allowed buffer size of 9534832640 "
                                "bytes."))
+    # the other two allocator failures in mlx 0.32.2 (strings from libmlx): the buffer-count
+    # limit, and Metal failing to hand out the buffer at all, which is the usual real OOM
+    assert is_oom(RuntimeError("[metal::malloc] Resource limit (499000) exceeded."))
+    assert is_oom(RuntimeError("[malloc] Unable to allocate 1073741824 bytes."))
     assert is_oom(RuntimeError("MPS backend out of memory (MPS allocated: 1.2 GB)"))
     assert is_oom(MemoryError())
     assert not is_oom(RuntimeError("shapes (2,3) and (4,) cannot be broadcast"))
