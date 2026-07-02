@@ -125,14 +125,13 @@ def p95(values: list[float]) -> float:
     return percentile(values, 0.95)
 
 
-def kv_ceiling(mem: MemSnapshot, reserve: float, kv_in_use: int, bytes_per_token: int,
-               est_seq_len: int) -> int:
-    """How many rows of `est_seq_len` tokens fit: current headroom minus the reserve, plus the
-    KV we already hold (it would be reused), divided by the per-row KV size. Uses headroom rather
-    than limit - used so that on unified memory the OS's available memory also counts."""
+def kv_ceiling(mem: MemSnapshot, reserve: float, kv_in_use: int, per_row_bytes: int) -> int:
+    """How many rows fit: current headroom minus the reserve, plus the cache we already hold
+    (it would be reused), divided by what one row of the estimated length holds. Uses headroom
+    rather than limit - used so that on unified memory the OS's available memory also
+    counts."""
     budget = mem.headroom - reserve * mem.limit + kv_in_use
-    per_row = max(1, bytes_per_token * max(1, est_seq_len))
-    return max(0, math.floor(budget / per_row))
+    return max(0, math.floor(budget / max(1, per_row_bytes)))
 
 
 class _Decisions:

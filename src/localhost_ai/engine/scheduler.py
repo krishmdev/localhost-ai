@@ -174,14 +174,12 @@ class Scheduler:
         self._trim_stats(now)
         if self.probe is not None:
             self.mem = self.probe.snapshot()
-        extra = self.row_state_tokens
-        kv_in_use = (self.kv_tokens + extra * len(self.running)) * self.runner.kv_bytes_per_token
+        kv_in_use = self.kv_bytes
         self._kv_at_tick = kv_in_use
         self.kv_ceiling = None
         if self.mem is not None:
             self.kv_ceiling = kv_ceiling(self.mem, self.cfg.mem_reserve, kv_in_use,
-                                         self.runner.kv_bytes_per_token,
-                                         self.est_seq_len + extra)
+                                         self.row_bytes(self.est_seq_len))
         d = self.controller.tick(Observation(now=now, running=len(self.running),
                                              queued=len(self.waiting), mem=self.mem,
                                              kv_ceiling=self.kv_ceiling))
@@ -198,13 +196,27 @@ class Scheduler:
     def kv_tokens(self) -> int:
         return self.runner.padded_tokens(self.state) if self.state is not None else 0
 
-    @property
-    def row_state_tokens(self) -> int:
-        """Memory every row holds regardless of its length, in KV-token equivalents: the
-        recurrent state of linear-attention layers (Qwen3.5 on MLX). The ceiling and admission
-        count it on top of each row's KV. 0 for pure-attention models."""
+    def row_bytes(self, tokens: int) -> int:
+        """Memory one row of a batch padded to `tokens` holds. A runner that knows its cache
+        layout says so itself (MLX: full vs sliding-window layers, allocation steps, recurrent
+        state); otherwise it's tokens x kv_bytes_per_token plus any fixed per-row state."""
+        own = getattr(self.runner, "row_bytes", None)
+        if own is not None:
+            return own(tokens)
         fixed = getattr(self.runner, "row_state_bytes", 0)
-        return -(-fixed // max(1, self.runner.kv_bytes_per_token)) if fixed > 0 else 0
+        return max(1, tokens) * self.runner.kv_bytes_per_token + fixed
+
+    @property
+    def kv_bytes(self) -> int:
+        """Memory the running batch's cache holds: read off the live cache when the runner can,
+        else counted from the padded tokens."""
+        if self.state is None:
+            return 0
+        own = getattr(self.runner, "kv_bytes", None)
+        if own is not None:
+            return own(self.state)
+        return (self.kv_tokens * self.runner.kv_bytes_per_token
+                + getattr(self.runner, "row_state_bytes", 0) * len(self.running))
 
     @property
     def est_seq_len(self) -> int:
@@ -243,13 +255,12 @@ class Scheduler:
                 self._finish(self.running[i], "cancelled")
             self._keep([i for i, r in enumerate(self.running) if not r.cancelled])
 
-    def _kv_budget_tokens(self) -> int | None:
-        """KV tokens the batch may hold, from the reading taken at the last tick: that tick's
-        headroom minus the reserve, plus the KV that was already held then."""
+    def _kv_budget_bytes(self) -> int | None:
+        """Cache memory the batch may hold, from the reading taken at the last tick: that
+        tick's headroom minus the reserve, plus the cache that was already held then."""
         if self.mem is None:
             return None
-        budget = self.mem.headroom - self.cfg.mem_reserve * self.mem.limit + self._kv_at_tick
-        return int(budget // self.runner.kv_bytes_per_token)
+        return int(self.mem.headroom - self.cfg.mem_reserve * self.mem.limit + self._kv_at_tick)
 
     def _admit(self) -> list[Request]:
         if self._hold_admission:
@@ -261,7 +272,7 @@ class Scheduler:
             self._rebuild_hold = False
             self._hold_admission = True
         limit = self.controller.limit
-        budget = self._kv_budget_tokens()
+        budget = self._kv_budget_bytes()
         cur_len = self.kv_tokens // len(self.running) if self.running else 0
         admitted: list[Request] = []
         longest = 0
@@ -277,8 +288,8 @@ class Scheduler:
                     break
                 if budget is not None:
                     rows = len(self.running) + len(admitted) + 1
-                    projected = rows * (max(cur_len, n) + max(1, req.remaining // 2)
-                                        + self.row_state_tokens)
+                    projected = rows * self.row_bytes(max(cur_len, n)
+                                                      + max(1, req.remaining // 2))
                     if projected > budget and (self.running or admitted):
                         break
                 self.waiting.popleft()

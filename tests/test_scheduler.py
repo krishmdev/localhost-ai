@@ -368,9 +368,9 @@ def test_fixed_per_row_state_counts_against_the_kv_budget():
 
     plain_admitted, plain = run(FakeRunner())
     admitted, s = run(HybridRunner())
-    assert plain_admitted == 20 and plain.row_state_tokens == 0
-    assert admitted == 11 and s.row_state_tokens == 50
-    # the ceiling divides by est_seq_len + 50 per row instead of est_seq_len alone
+    assert plain_admitted == 20 and plain.row_bytes(10) == 10_000
+    assert admitted == 11 and s.row_bytes(10) == 60_000
+    # the ceiling divides by est_seq_len tokens plus 50 tokens' worth per row
     assert s.kv_ceiling is not None and plain.kv_ceiling is not None
     assert s.kv_ceiling < plain.kv_ceiling / 2
     drain(s)
@@ -427,3 +427,27 @@ def test_lost_cache_rebuilds_a_smaller_batch(controller):
     for p, r in zip(prompts, rs, strict=True):
         assert done(r).finish_reason == "length"
         assert r.generated == reference(p, 20)
+
+
+def test_runner_row_bytes_and_live_kv_bytes_drive_the_budget():
+    # A runner that knows its cache layout (the MLX runner) prices rows itself and reports the
+    # bytes its cache really holds; the scheduler uses those instead of tokens x bytes/token.
+    @dataclass
+    class LayoutRunner(FakeRunner):
+        def row_bytes(self, tokens):
+            return 200_000  # e.g. a 256-token allocation step, whatever the length
+
+        def kv_bytes(self, state):
+            return 123_456
+
+    probe = FakeProbe(limit=1_000_000, used=100_000)  # 750_000 bytes of budget
+    s = make(runner=LayoutRunner(), controller=FixedController(16), probe=probe,
+             control_interval_s=0.0)
+    for i in range(8):
+        s.add(req([i + 1] * 5, SamplingParams(temperature=0.0, max_tokens=20)))
+    s.step()
+    assert len(s.running) == 3  # 3 x 200_000 fits in 750_000, 4 doesn't
+    s.step()
+    assert s.kv_bytes == 123_456
+    assert s.kv_ceiling == (900_000 - 150_000 + 123_456) // 200_000
+    drain(s)

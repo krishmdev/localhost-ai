@@ -102,7 +102,7 @@ def run(sc: Scenario) -> Trace:
         mem = MemSnapshot(used=int(used * MEM_UNIT), limit=MEM_UNIT,
                           headroom=max(0, int((1.0 - used) * MEM_UNIT)))
         ceil_ = kv_ceiling(mem, sc.reserve, int(running * sc.per_row_mem * MEM_UNIT),
-                           int(sc.per_row_mem * MEM_UNIT), 1)
+                           int(sc.per_row_mem * MEM_UNIT))
         d = ctl.tick(Observation(now=now, running=running, queued=sc.demand - running,
                                  mem=mem, kv_ceiling=ceil_))
         if oom is not None:

@@ -174,7 +174,7 @@ def test_fixed_mode_never_changes():
 def test_kv_ceiling_formula():
     # 1 GB limit, 15% reserve, 600 MB used of which 100 MB is KV, 1 KB/token, 1000-token rows
     mem = MemSnapshot(used=600_000_000, limit=1_000_000_000, headroom=400_000_000)
-    assert kv_ceiling(mem, 0.15, 100_000_000, 1000, 1000) == 350
+    assert kv_ceiling(mem, 0.15, 100_000_000, 1000 * 1000) == 350
 
 
 # --- simulator acceptance bounds (tests/sim_controller.py) -----------------------------------
