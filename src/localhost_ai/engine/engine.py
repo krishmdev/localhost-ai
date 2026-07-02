@@ -61,12 +61,19 @@ class AsyncEngine:
         self._thread = threading.Thread(target=self._loop, name="lhai-compute", daemon=True)
         self._thread.start()
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self, timeout: float | None = 5.0) -> bool:
+        """Ask the compute thread to stop and wait up to `timeout` seconds (None: until it
+        has). Returns True once it has exited. If it is still inside a step, it stays
+        referenced, so `alive` keeps reporting it and `start` won't launch a second one."""
         self._stop.set()
         self._wake.set()
         if self._thread is not None:
             self._thread.join(timeout)
+            if self._thread.is_alive():
+                log.warning("compute thread still running after %.1fs", timeout or 0.0)
+                return False
             self._thread = None
+        return True
 
     @property
     def alive(self) -> bool:

@@ -210,3 +210,23 @@ def test_swap_uses_the_new_models_memory_probe():
         assert r.status_code == 200
         assert svc.engine.scheduler.probe is mlx_probe
         assert svc.engine.scheduler.mem.limit == 1 << 32
+
+
+def test_engine_stop_waits_for_a_long_step():
+    import threading
+
+    svc = fake_service()
+    entered, release = threading.Event(), threading.Event()
+    step = svc.engine.scheduler.step
+
+    def slow_step():
+        entered.set()
+        release.wait(5)
+        return step()
+
+    svc.engine.scheduler.step = slow_step
+    svc.start()
+    assert entered.wait(5)
+    assert svc.engine.stop(timeout=0.05) is False and svc.engine.alive
+    release.set()
+    assert svc.engine.stop(timeout=5) is True and not svc.engine.alive
