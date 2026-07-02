@@ -110,7 +110,14 @@ batch-generator helper. That helper, and `ArraysCache.merge` of empty caches, gi
 layers a zero `left_padding`, and `ArraysCache.make_mask` checks that before the prefill
 lengths. For Qwen3.5 (gated-delta linear attention in 3 of every 4 layers) that fed the pad
 tokens after each shorter prompt into its recurrent state. `tests/test_mlx_runner.py` builds a
-tiny random Qwen3.5 and checks batched against one-at-a-time logits, which catches it.
+tiny random Qwen3.5 and checks batched against one-at-a-time logits, which catches it (setting a
+zero `left_padding` back in makes three of its cases fail). A chunked-prefill case checks that
+the lengths also count down correctly when a long prompt spans several prefill chunks.
+
+Gemma 4 E4B needs no special handling: its sliding-window layers get `BatchRotatingKVCache`
+(window 512, no kept prefix) and its last 18 layers read an earlier layer's KV, so they have no
+cache of their own. The tests use a tiny Gemma 4 with a 4-token window so both the prefill and
+decode wrap it inside a mixed-length batch.
 
 Differences from the torch path:
 
