@@ -5,6 +5,7 @@ Rows are compared under teacher forcing (every row is fed the same next tokens b
 alone) rather than by greedy decoding, so near-tied logits in a random model can't make the
 test flaky."""
 
+import numpy as np
 import pytest
 import torch
 
@@ -36,12 +37,27 @@ def runner():
 
 
 def alone(r, prompt, forced):
-    """Logits of one sequence run by itself: after prefill, then after each forced token."""
-    state, logits = r.prefill([prompt])
-    out = [logits[0]]
-    for t in forced:
-        out.append(r.decode(state, [t])[0])
+    """Reference logits for one sequence, independent of the runner and of mlx-lm's batch
+    caches: the model's own single-sequence caches (make_prompt_cache), fed one token at a
+    time. Entry 0 is after the prompt, then one entry after each forced token."""
+    from mlx_lm.models.cache import make_prompt_cache
+
+    cache = make_prompt_cache(r.model)
+    out = []
+    for i, t in enumerate(prompt + forced):
+        logits = r.model(mx.array([[t]], dtype=mx.int32), cache=cache)[:, -1, :]
+        if i >= len(prompt) - 1:
+            out.append(torch.from_numpy(np.array(logits.astype(mx.float32)))[0])
     return out
+
+
+def test_runner_alone_matches_the_plain_cache_reference(runner, hybrid, windowed):
+    for r in (runner, hybrid, windowed):
+        for p, f in zip(PROMPTS, FORCED, strict=True):
+            state, logits = r.prefill([p])
+            got = [logits[0]] + [r.decode(state, [t])[0] for t in f]
+            for a, b in zip(got, alone(r, p, f), strict=True):
+                assert_close(a, b)
 
 
 def assert_close(a, b):
