@@ -35,16 +35,17 @@ def loaded(request):
     import torch
 
     from localhost_ai.models.loader import load
-    from localhost_ai.models.registry import Registry
+    from localhost_ai.models.registry import Registry, local_path
 
     s = get_settings()
+    spec = Registry(s.models_file).get(request.param)
     try:
-        spec = Registry(s.models_file).get(request.param)
-        dev = DeviceConfig(torch.device("mps"), torch.float16, threads=1)  # unused by mlx
-        m = load(spec, dev, s.models_dir)
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip(f"{request.param} not available ({exc}); "
+        local_path(spec, s.models_dir)
+    except Exception as exc:  # noqa: BLE001 - only a missing snapshot skips; load errors fail
+        pytest.skip(f"{request.param} not downloaded ({type(exc).__name__}); "
                     f"LHAI_MODEL={request.param} uv run lhai models pull")
+    dev = DeviceConfig(torch.device("mps"), torch.float16, threads=1)  # unused by mlx
+    m = load(spec, dev, s.models_dir)
     yield m
     m.runner.release()
 
