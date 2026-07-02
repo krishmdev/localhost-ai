@@ -153,6 +153,11 @@ def load_mlx(spec: ModelSpec, models_dir: Path) -> LoadedModel:
     kinds = [a.dtype for _, a in tree_flatten(model.parameters())
              if mx.issubdtype(a.dtype, mx.floating)]
     dtype = max(set(kinds), key=kinds.count) if kinds else mx.float16
+    if mx.metal.is_available():
+        # Let Metal keep up to the recommended working set resident, as mlx-lm's generate does,
+        # so a large model's weights aren't paged out between steps under memory pressure. It
+        # is a cap on wired memory, not a reservation, and applies to the whole process.
+        mx.set_wired_limit(mx.device_info()["max_recommended_working_set_size"])
     runner = MLXModelRunner(model, eos_ids=_eos_from_files(path, tokenizer))
     loaded = LoadedModel(spec, runner, tokenizer, dtype, path, time.perf_counter() - t, quant)
     log.info("loaded %s@%s with mlx/%s %s in %.1fs (kv %d B/token, %d B fixed state per row, "
