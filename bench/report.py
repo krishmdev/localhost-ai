@@ -18,7 +18,11 @@ import plotstyle  # noqa: E402
 plt = plotstyle.plt
 FIG = HERE / "figures"
 TARGET_NAMES = {"cpu-docker": "CPU, Docker (linux/arm64 VM; contended shared host, rough)",
-                "mps-native": "Apple GPU (MPS), native"}
+                "mps-native": "Apple GPU (MPS), native",
+                "mlx-qwen2.5-0.5b": "Apple GPU via MLX, Qwen2.5-0.5B-Instruct 4-bit",
+                "mlx-gemma-4-e4b": "Apple GPU via MLX, Gemma 4 E4B-it 4-bit",
+                "mlx-qwen3.5-9b": "Apple GPU via MLX, Qwen3.5-9B 4-bit"}
+SWEEPS = ("mps-native", "mlx-qwen2.5-0.5b", "mlx-gemma-4-e4b", "mlx-qwen3.5-9b", "cpu-docker")
 
 
 def load(name: str) -> dict | None:
@@ -42,19 +46,19 @@ def host_line(m: dict) -> str:
 
 
 def sweep_table(d: dict) -> list[str]:
-    rows = ["| controller | clients | req/s | output tok/s | TTFT p50 / p95 (ms) | "
+    rows = ["| controller | clients | completed | req/s | output tok/s | TTFT p50 / p95 (ms) | "
             "request TPOT p50 / p95 (ms) | SLO attainment | errors | host CPU idle before |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for r in d["runs"]:
         if r.get("skipped"):
             rows.append(f"| {r['mode']} | {r['concurrency']} | skipped: {r['skipped']} |"
-                        " | | | | | |")
+                        " | | | | | | |")
             continue
         slo = "n/a" if r["slo_attainment"] is None else f"{r['slo_attainment'] * 100:.0f}%"
         idle = r.get("host_cpu_idle_before")
         load = "n/a" if idle is None else f"{idle:.0f}%"
         rows.append(
-            f"| {r['mode']} | {r['concurrency']} | {r['req_per_s']:.2f} | "
+            f"| {r['mode']} | {r['concurrency']} | {r['completed']} | {r['req_per_s']:.2f} | "
             f"{r['out_tok_per_s']:.0f} | {fmt(r['ttft_p50_ms'], 0)} / {fmt(r['ttft_p95_ms'], 0)} | "
             f"{fmt(r['req_tpot_p50_ms'])} / {fmt(r['req_tpot_p95_ms'])} | {slo} | "
             f"{r['errors']} | {load} |")
@@ -177,8 +181,10 @@ def main() -> None:
            "is the share of requests whose request TPOT is at or under the SLO. The SLO is "
            "calibrated per target before the sweep as a fixed multiple of the median request "
            "TPOT of a single client with batch size 1.", ""]
-    for label in ("mps-native", "cpu-docker"):
+    for label in SWEEPS:
         d = load(label)
+        if d is None and label.startswith("mlx-"):
+            continue
         out += [f"## {TARGET_NAMES[label]}", ""]
         if d is None:
             out += ["Not run yet.", ""]
@@ -198,6 +204,8 @@ def main() -> None:
                 f"Host swap: {pre.get('host_swap')}."
                 + (" Warnings: " + "; ".join(pre["warnings"]) if pre.get("warnings") else ""),
                 "", f"Host: {host_line(d['manifest'])}", ""]
+        if pre.get("backend") == "mlx":
+            out += [mlx_memory_note(d), ""]
         if label == "cpu-docker":
             idles = [r["host_cpu_idle_before"] for r in d["runs"]
                      if r.get("host_cpu_idle_before") is not None]
@@ -239,6 +247,7 @@ def main() -> None:
                 out.append(f"- {mode}: peak throughput was {b['out_tok_per_s']:.0f} tok/s "
                            f"at {b['concurrency']} clients; {slo} met the SLO at that point.")
         out.append("")
+    out += mlx_direct_section()
     out += ["## NVIDIA CUDA", "", "Not measured. This machine has no NVIDIA GPU. The CUDA "
             "probe, the cu126 image and `docker-compose.gpu.yml` are untested.", ""]
     out += ["## Memory pressure (CPU, Docker)", ""]
@@ -312,6 +321,96 @@ def main() -> None:
     print("wrote bench/RESULTS.md")
 
 
+def mlx_memory_note(d: dict) -> str:
+    """What the MLX probe saw across the sweep: the model's footprint and how close the served
+    system came to the limit."""
+    pre = d["preflight"]
+    mem = pre.get("memory") or {}
+    pts = [(p["mem_used_bytes"], p.get("headroom_frac")) for r in d["runs"]
+           for p in r.get("trace", []) if p.get("mem_used_bytes") is not None]
+    peak = max(u for u, _ in pts) if pts else None
+    low = min(h for _, h in pts if h is not None) if pts else None
+    kv = int(pre.get("kv_bytes_per_token") or 0)
+    row = int(pre.get("row_state_bytes") or 0)
+    text = (f"MLX backend, {pre.get('quant')} weights, {pre.get('dtype')} activations. KV "
+            f"{kv / 1024:.0f} KiB per token")
+    text += (f", plus {row / 2**20:.0f} MiB of recurrent state per row" if row else "") + ". "
+    text += (f"MLX active memory before the run: {fmt((mem.get('used_bytes') or 0) / 2**30, 2)} "
+             "GiB.")
+    if peak is not None:
+        text += (f" Highest active memory in any telemetry sample during the sweep: "
+                 f"{peak / 2**30:.2f} GiB; lowest headroom {low:.0%} of the probe's limit.")
+    return text
+
+
+def mlx_direct_section() -> list[str]:
+    d = load("mlx-direct")
+    if not d:
+        return []
+    out = ["## MLX presets, runner only (no HTTP, no controller)", "",
+           "`bench/mlx_direct.py` loads the preset, then prefills a fixed batch of prompts from "
+           "`bench/prompts.jsonl` and runs 128 greedy decode steps with EOS ignored. Memory is "
+           "MLX's allocator (active = live arrays including weights; peak = high-water mark "
+           "since the last reset).", "",
+           "| preset | load | active after load | peak during load | KV per token | "
+           "recurrent state per row | Metal working set | answer to \"capital of France\" |",
+           "|---|---:|---:|---:|---:|---:|---:|---|"]
+    for e in d.values():
+        ld = e["load"]
+        row = e["row_state_bytes"]
+        out.append(f"| {e['preset']} | {ld['load_s']:.1f} s | {ld['active_gib']:.2f} GiB | "
+                   f"{ld['peak_gib']:.2f} GiB | {e['kv_bytes_per_token'] / 1024:.0f} KiB | "
+                   f"{f'{row / 2**20:.0f} MiB' if row else '0'} | "
+                   f"{e['metal_recommended_working_set_gib']:.2f} GiB | "
+                   f"{e['answer'].strip()!r} |")
+    out += ["", "| preset | batch | prefill | decode step | step vs batch 1 | "
+            "decode tok/s (all rows) | peak memory |", "|---|---:|---:|---:|---:|---:|---:|"]
+    for e in d.values():
+        one = next((r["decode_step_ms"] for r in e["runs"] if r["batch"] == 1), None)
+        for r in e["runs"]:
+            ratio = f"{r['decode_step_ms'] / one:.1f}x" if one else "n/a"
+            out.append(f"| {e['preset']} | {r['batch']} | {r['prefill_s']:.2f} s | "
+                       f"{r['decode_step_ms']:.1f} ms | {ratio} | {r['decode_tok_per_s']:.0f} | "
+                       f"{r['peak_gib']:.2f} GiB |")
+    hosts = {host_line(e["manifest"]) for e in d.values() if e.get("manifest")}
+    out += ["", "Host: " + "; ".join(sorted(hosts)), ""]
+    return out + mlx_qmm_section()
+
+
+def mlx_qmm_section() -> list[str]:
+    q = load("mlx-qmm")
+    if not q:
+        return []
+    runs = q["runs"]
+    one = runs[0]["ms"]
+    out = ["### 4-bit matmul cost against rows", "",
+           f"`bench/mlx_qmm.py` times `mx.quantized_matmul` (MLX {q['mlx']}, {q['bits']}-bit, "
+           f"group size {q['group_size']}) on {q['mats']} distinct {q['n']} x {q['k']} weight "
+           f"matrices ({q['weight_bytes'] / 1e9:.2f} GB, more than the GPU caches hold), "
+           "with one token per row as in a decode step. \"Weight GB/s\" is the weight bytes "
+           "divided by the time, so it counts each weight once however many rows share it.", "",
+           "| rows | time for all matrices | vs 1 row | weight GB/s |", "|---:|---:|---:|---:|"]
+    for r in runs:
+        out.append(f"| {r['rows']} | {r['ms']:.2f} ms | {r['ms'] / one:.1f}x | "
+                   f"{r['weight_gb_per_s']:.0f} |")
+    # the longest run of row counts whose cost is still about proportional to the rows
+    lin = 0
+    for r in runs[1:]:
+        if r["ms"] / one < 0.8 * r["rows"]:
+            break
+        lin = r["rows"]
+    rest = [r for r in runs if r["rows"] > lin]
+    if lin:
+        out += ["", f"Up to {lin} rows the time grows about in proportion to the row count, so "
+                "each extra row costs close to another full read of the weights"
+                + (f"; past that it stays at {min(r['ms'] for r in rest):.0f}-"
+                   f"{max(r['ms'] for r in rest):.0f} ms" if rest else "")
+                + ". The decode step of a large preset follows the same shape in the table "
+                "above, so on this machine batching those pays off only past that point."]
+    out += ["", f"Host: {host_line(q['manifest'])}", ""]
+    return out
+
+
 def write_section(path: Path, name: str, body: str) -> None:
     text = path.read_text()
     begin, end = f"<!-- {name}:begin -->", f"<!-- {name}:end -->"
@@ -320,6 +419,37 @@ def write_section(path: Path, name: str, body: str) -> None:
     head, rest = text.split(begin, 1)
     _, tail = rest.split(end, 1)
     path.write_text(f"{head}{begin}\n{body}\n{end}{tail}")
+
+
+SWEEP_OF = {"qwen2.5-0.5b-mlx4": "mlx-qwen2.5-0.5b", "gemma-4-e4b-mlx4": "mlx-gemma-4-e4b",
+            "qwen3.5-9b-mlx4": "mlx-qwen3.5-9b"}
+
+
+def readme_mlx() -> list[str]:
+    """One line per MLX preset: footprint and decode speed from mlx_direct, and the best served
+    point (AIMD) from its sweep."""
+    d = load("mlx-direct")
+    if not d:
+        return []
+    rows = ["", "MLX 4-bit presets on the same Mac (runner-only decode, 128 greedy steps; served "
+            "numbers from each preset's sweep in RESULTS.md):", "",
+            "| preset | memory after load | decode tok/s, 1 row | decode tok/s, 16 rows | "
+            "served AIMD peak |", "|---|---:|---:|---:|---|"]
+    for e in d.values():
+        by = {r["batch"]: r for r in e["runs"]}
+        one, sixteen = by.get(1), by.get(16)
+        sw = load(SWEEP_OF.get(e["preset"], ""))
+        served = "not run"
+        if sw:
+            b = best(sw, "aimd", "out_tok_per_s")
+            if b:
+                att = "n/a" if b["slo_attainment"] is None else f"{b['slo_attainment']:.0%}"
+                served = (f"{b['out_tok_per_s']:.0f} tok/s at {b['concurrency']} clients, "
+                          f"{att} within the {sw['slo_tpot_ms']} ms SLO")
+        rows.append(f"| {e['preset']} | {e['load']['active_gib']:.2f} GiB | "
+                    f"{fmt(one and one['decode_tok_per_s'], 0)} | "
+                    f"{fmt(sixteen and sixteen['decode_tok_per_s'], 0)} | {served} |")
+    return rows
 
 
 def readme_summary() -> list[str]:
@@ -352,6 +482,7 @@ def readme_summary() -> list[str]:
                  "ignores time to first token, which grows with queueing when the batch is "
                  "capped; that's the TTFT column. Throughput is the server's generated-token "
                  "count over the measurement window."]
+    rows += readme_mlx()
     rows += ["", "NVIDIA CUDA: not measured (no NVIDIA GPU here). The Docker CPU sweep ran on a "
              "contended host; its rough numbers are in RESULTS.md only."]
     mp = load("cpu-mempressure-guard-pair")
