@@ -130,6 +130,10 @@ class MLXModelRunner:
         width = max(len(h) for h in heads)
         if width:
             lengths = [len(h) for h in heads]
+            if min(lengths) < width and width % self.prefill_step == 1:
+                # A 1-token chunk takes BatchRotatingKVCache's decode path, which refuses to run
+                # while right padding is set. One more pad column makes the last chunk 2 wide.
+                width += 1
             pad = [width - n for n in lengths]
             ids = mx.array([h + [0] * p for h, p in zip(heads, pad, strict=True)], dtype=mx.int32)
             if max(pad):

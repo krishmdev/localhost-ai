@@ -192,18 +192,6 @@ def test_hybrid_reports_fixed_recurrent_state_per_row(hybrid):
     assert hybrid.kv_bytes_per_token == 2 * 2 * 2 * 16 * 4  # the 2 full-attention layers
 
 
-def test_hybrid_chunked_prefill_matches_alone(hybrid):
-    # The longest prompt spans three prefill chunks of 3, so the recurrent caches' lengths have
-    # to count down across chunks (mlx-lm's advance) for the shorter rows' pads to stay masked.
-    chunked = MLXModelRunner(hybrid.model, eos_ids=frozenset({0}), prefill_step=3)
-    ref = [alone(hybrid, p, f) for p, f in zip(PROMPTS, FORCED, strict=True)]
-    state, logits = chunked.prefill(PROMPTS)
-    steps = [logits, chunked.decode(state, [f[0] for f in FORCED])]
-    for step, got in enumerate(steps):
-        for row in range(len(PROMPTS)):
-            assert_close(got[row], ref[row][step])
-
-
 def tiny_gemma4():
     """Gemma 4's text stack: sliding-window layers (BatchRotatingKVCache) with a full-attention
     layer every third, and the last two layers reuse earlier layers' KV (no cache of their own).
@@ -267,3 +255,35 @@ def test_windowed_join_and_select_match_alone(windowed):
     got = windowed.decode(kept, [FORCED[1][3], FORCED[2][1]])
     assert_close(got[0], ref[1][4])
     assert_close(got[1], ref[2][2])
+
+
+@pytest.mark.parametrize("step", [2, 3, 5])
+@pytest.mark.parametrize("model", ["llama", "hybrid", "windowed"])
+def test_chunked_prefill_matches_alone(model, step, request):
+    # Every architecture, with chunk sizes that leave a 1-token last chunk for some head widths
+    # (the 9-token prompt has an 8-token head: 8 % 3 == 2, 8 % 5 == 3, 5 % 2 == 1 for the batch
+    # of the shorter prompts below). Sliding-window caches used to fail on a 1-token chunk while
+    # the right padding was still active.
+    base = request.getfixturevalue({"llama": "runner", "hybrid": "hybrid",
+                                    "windowed": "windowed"}[model])
+    chunked = MLXModelRunner(base.model, eos_ids=frozenset({0}), prefill_step=step)
+    for prompts, forced in ((PROMPTS, FORCED), (PROMPTS[1:], FORCED[1:])):
+        ref = [alone(base, p, f) for p, f in zip(prompts, forced, strict=True)]
+        state, logits = chunked.prefill(prompts)
+        steps = [logits, chunked.decode(state, [f[0] for f in forced])]
+        for i, got in enumerate(steps):
+            for row in range(len(prompts)):
+                assert_close(got[row], ref[row][i])
+
+
+@pytest.mark.parametrize("model", ["llama", "hybrid", "windowed"])
+def test_one_token_head_with_padding(model, request):
+    # head widths 1 and 0: the whole padded prefill is a single token
+    r = request.getfixturevalue({"llama": "runner", "hybrid": "hybrid",
+                                 "windowed": "windowed"}[model])
+    ref = [alone(r, p, [9]) for p in ([5, 6], [7])]
+    state, logits = r.prefill([[5, 6], [7]])
+    got = [logits, r.decode(state, [9, 9])]
+    for i in range(2):
+        for row in range(2):
+            assert_close(got[i][row], ref[row][i])
