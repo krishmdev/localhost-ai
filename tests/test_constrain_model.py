@@ -43,7 +43,8 @@ def snapshot(name):
         pytest.skip(f"{name} not downloaded ({exc})")
 
 
-@pytest.mark.parametrize("preset", ["smollm2-135m", "qwen2.5-0.5b-mlx4"])
+@pytest.mark.parametrize("preset", ["smollm2-135m", "qwen2.5-0.5b-mlx4", "qwen2.5-3b-mlx4",
+                                    "llama-3.2-3b-mlx4", "gemma-4-e4b-mlx4", "qwen3.5-9b-mlx4"])
 def test_real_tokenizer_grammar(preset):
     from transformers import AutoTokenizer
 
