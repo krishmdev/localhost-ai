@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .config import Settings
+from .config import Settings, parse_adapters
 from .engine.constrain import Grammars
 from .engine.controller import AIMDConfig, AIMDController, Controller, FixedController
 from .engine.engine import AsyncEngine
@@ -34,6 +34,7 @@ class ModelParts:
     # Builds response_format constraints for this tokenizer (engine/constrain.py). None means
     # the model can't do constrained decoding and such requests get a 400.
     grammars: Any = None
+    adapters: list[str] = field(default_factory=list)  # LoRA adapters requests can pick
 
 
 def aimd_config(s: Settings) -> AIMDConfig:
@@ -178,21 +179,24 @@ def build_from_settings(s: Settings) -> Service:
 
     def loader(name: str) -> ModelParts:
         spec = registry.get(name)
-        m = load(spec, dev, s.models_dir, s.quantization, s.dtype)
+        # LHAI_ADAPTERS belong to the startup model; a hot-swapped model loads without them
+        adapters = parse_adapters(s.adapters) if spec.name == registry.get(s.model).name else []
+        m = load(spec, dev, s.models_dir, s.quantization, s.dtype, adapters)
         if s.prefix_cache:
             m.runner.prefix = PrefixCache(budget_bytes=s.prefix_cache_mb << 20,
                                           min_tokens=s.prefix_min_tokens)
         return ModelParts(
             name=spec.name, runner=m.runner, tokenizer=m.tokenizer, encode_chat=m.encode_chat,
             default_max_tokens=spec.max_new_tokens, probe=probe(spec.backend),
-            grammars=Grammars.from_hf(m.tokenizer, m.runner.eos_ids),
+            grammars=Grammars.from_hf(m.tokenizer, m.runner.eos_ids), adapters=m.adapters,
             info={"model": spec.name, "repo": spec.repo, "revision": spec.revision,
                   "backend": spec.backend,
                   "device": "metal" if spec.backend == "mlx" else dev.kind,
                   "dtype": m.dtype_name, "quant": m.quant, "threads": str(dev.threads),
                   "kv_bytes_per_token": str(m.runner.kv_bytes_per_token),
                   "row_state_bytes": str(getattr(m.runner, "row_state_bytes", 0)),
-                  "prefix_cache": f"{s.prefix_cache_mb} MiB" if s.prefix_cache else "off"},
+                  "prefix_cache": f"{s.prefix_cache_mb} MiB" if s.prefix_cache else "off",
+                  "adapters": ",".join(m.adapters)},
         )
 
     parts = loader(s.model)

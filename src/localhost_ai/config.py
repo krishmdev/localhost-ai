@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     prefix_cache: bool = False
     prefix_cache_mb: int = Field(512, ge=1)
     prefix_min_tokens: int = Field(32, ge=1)
+    # LoRA adapters for the startup model (MLX presets): "name=path,name2=path2", each path an
+    # mlx-lm adapter directory or one .safetensors checkpoint inside one.
+    adapters: str = ""
 
     admin_token: str = ""
     # Host headers the server answers to (DNS-rebinding guard), comma-separated; "server" is
@@ -57,6 +60,23 @@ class Settings(BaseSettings):
     allowed_hosts: str = "localhost,127.0.0.1,server,testserver"
     host: str = "127.0.0.1"
     port: int = 8000
+
+
+def parse_adapters(value: str) -> list[tuple[str, str]]:
+    """LHAI_ADAPTERS, `name=path,name2=path2`, as (name, path) pairs."""
+    out = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        name, sep, path = item.partition("=")
+        if not sep or not name.strip() or not path.strip():
+            raise ValueError(f"adapter entry {item!r} should look like name=path")
+        out.append((name.strip(), path.strip()))
+    names = [n for n, _ in out]
+    if len(set(names)) != len(names):
+        raise ValueError(f"adapter names must be unique: {names}")
+    return out
 
 
 @lru_cache

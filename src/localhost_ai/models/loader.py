@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ class LoadedModel:
     path: Path
     load_s: float
     quant: str = "none"
+    adapters: list[str] = field(default_factory=list)
 
     @property
     def dtype_name(self) -> str:
@@ -53,12 +54,16 @@ def _eos_ids(tokenizer: Any, model: Any) -> frozenset[int]:
 
 
 def load(spec: ModelSpec, dev: DeviceConfig, models_dir: Path, quantization: str = "none",
-         dtype_override: str = "auto") -> LoadedModel:
+         dtype_override: str = "auto",
+         adapters: list[tuple[str, str]] | None = None) -> LoadedModel:
     if spec.backend == "mlx":
         if quantization != "none":
             raise RuntimeError(f"quantization={quantization} applies to torch presets; "
                                f"{spec.name} is an MLX checkpoint that is already quantized")
-        return load_mlx(spec, models_dir)
+        return load_mlx(spec, models_dir, adapters)
+    if adapters:
+        raise RuntimeError(f"LoRA adapters are served on MLX presets only; {spec.name} is a "
+                           "torch preset")
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     t = time.perf_counter()
@@ -126,7 +131,8 @@ def _eos_from_files(path: Path, tokenizer: Any) -> frozenset[int]:
     return frozenset(ids)
 
 
-def load_mlx(spec: ModelSpec, models_dir: Path) -> LoadedModel:
+def load_mlx(spec: ModelSpec, models_dir: Path,
+             adapters: list[tuple[str, str]] | None = None) -> LoadedModel:
     try:
         import mlx.core as mx
         from mlx.utils import tree_flatten
@@ -159,8 +165,20 @@ def load_mlx(spec: ModelSpec, models_dir: Path) -> LoadedModel:
         # so a large model's weights aren't paged out between steps under memory pressure. It
         # is a cap on wired memory, not a reservation, and applies to the whole process.
         mx.set_wired_limit(working_set)
-    runner = MLXModelRunner(model, eos_ids=_eos_from_files(path, tokenizer))
-    loaded = LoadedModel(spec, runner, tokenizer, dtype, path, time.perf_counter() - t, quant)
+    eos = _eos_from_files(path, tokenizer)
+    names: list[str] = []
+    if adapters:
+        from ..engine.lora import AdapterSpec, LoRAMLXRunner, install
+
+        aset = install(model, [AdapterSpec.from_path(n, p) for n, p in adapters])
+        runner: Any = LoRAMLXRunner(model, eos_ids=eos, adapters=aset)
+        names = aset.names
+        log.info("adapters %s on %d layers of %s", ", ".join(names), len(aset.modules),
+                 spec.name)
+    else:
+        runner = MLXModelRunner(model, eos_ids=eos)
+    loaded = LoadedModel(spec, runner, tokenizer, dtype, path, time.perf_counter() - t, quant,
+                         names)
     log.info("loaded %s@%s with mlx/%s %s in %.1fs (kv %d B/token, %d B fixed state per row, "
              "%.2f GiB active)", spec.repo, spec.revision[:8], quant, loaded.dtype_name,
              loaded.load_s, runner.kv_bytes_per_token, runner.row_state_bytes,

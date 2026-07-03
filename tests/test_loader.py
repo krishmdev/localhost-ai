@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from localhost_ai.config import parse_adapters
 from localhost_ai.device import DeviceConfig
 from localhost_ai.models import loader
 from localhost_ai.models.loader import LoadedModel, _eos_from_files, mlx_bits
@@ -78,3 +79,17 @@ def test_mlx_label_must_match_the_checkpoint(tmp_path, monkeypatch):
     monkeypatch.setattr(loader, "local_path", lambda s, d: tmp_path)
     with pytest.raises(RuntimeError, match="models.yaml says mlx4.*config.json says mlx8"):
         loader.load(spec(backend="mlx", quantization="mlx4"), CPU, tmp_path)
+
+
+def test_parse_adapters():
+    assert parse_adapters("a=/x, b=rel/y ,") == [("a", "/x"), ("b", "rel/y")]
+    with pytest.raises(ValueError):
+        parse_adapters("justaname")
+    with pytest.raises(ValueError, match="unique"):
+        parse_adapters("a=/x,a=/y")
+
+
+
+def test_torch_presets_refuse_adapters(tmp_path):
+    with pytest.raises(RuntimeError, match="MLX presets only"):
+        loader.load(spec(), CPU, tmp_path, adapters=[("a", "/x")])
