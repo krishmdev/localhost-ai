@@ -64,6 +64,10 @@ class EngineMetrics:
                                registry=r)
         self.kv_bytes = Gauge(p + "kv_cache_bytes", "Bytes the batch cache holds (KV and "
                               "recurrent state)", registry=r)
+        self.prefix_bytes = Gauge(p + "prefix_cache_bytes", "Bytes held by stored prompt "
+                                  "prefixes", registry=r)
+        self.prefix_hit_tokens = Gauge(p + "prefix_cache_hit_tokens", "Prompt tokens served "
+                                       "from stored prefixes since start", registry=r)
         self.kv_ceiling = Gauge(p + "kv_ceiling_rows", "Rows that fit in memory (estimate)",
                                 registry=r)
         self.busy = Gauge(p + "engine_busy_ratio", "Fraction of wall time spent computing",
@@ -120,6 +124,8 @@ class EngineMetrics:
         self.limit.set(st["batch_limit"])
         self.kv_tokens.set(st["kv_tokens"])
         self.kv_bytes.set(st["kv_bytes"])
+        self.prefix_bytes.set(st.get("prefix_bytes", 0))
+        self.prefix_hit_tokens.set(st.get("prefix_hit_tokens", 0))
         self.busy.set(st["busy_ratio"])
         if st["decode_step_p95_ms"] is not None:
             self.p95.set(st["decode_step_p95_ms"] / 1e3)
