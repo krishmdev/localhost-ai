@@ -329,7 +329,11 @@ class Scheduler:
                 r.detok = IncrementalDetokenizer(self.tokenizer, r.params.stop)
                 r.generator = make_generator(r.params.seed)
         try:
-            state, logits = self.runner.prefill([r.all_ids for r in new])
+            seqs = [r.all_ids for r in new]
+            adapters = [r.adapter for r in new]
+            # only LoRA runners take adapters; the rest never see the argument
+            state, logits = (self.runner.prefill(seqs, adapters=adapters) if any(adapters)
+                             else self.runner.prefill(seqs))
         except Exception as exc:
             if not is_oom(exc):
                 for r in new:

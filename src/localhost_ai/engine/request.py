@@ -73,6 +73,8 @@ class Request:
     # response_format constraint (engine/constrain.py), built at submit time; advanced by
     # sampling, so it stays in step with `generated` across preemption and recompute.
     constraint: object | None = None
+    # LoRA adapter name (engine/lora.py); None runs the base model.
+    adapter: str | None = None
 
     @property
     def num_prompt(self) -> int:
