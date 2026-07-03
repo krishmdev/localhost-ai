@@ -116,6 +116,36 @@ Security:
 - Set a token, and extend the host list deliberately, before binding anything other than
   127.0.0.1.
 
+### JSON output
+
+`response_format` works as in the OpenAI API: `{"type": "json_object"}` for any JSON object,
+or `{"type": "json_schema", "json_schema": {"name": ..., "schema": {...}, "strict": true}}`.
+The grammar is enforced token by token with [llguidance](https://github.com/guidance-ai/llguidance):
+before each token is sampled, every token that can't continue valid JSON (or that breaks the
+schema) is masked out, so a response that finishes with `finish_reason: "stop"` always parses.
+It works on both backends and in batches that mix constrained and plain requests, and it also
+works on the WebSocket API.
+
+```python
+r = client.chat.completions.create(
+    model="qwen2.5-3b-mlx4", messages=[{"role": "user", "content": "Paris as JSON"}],
+    response_format={"type": "json_schema", "json_schema": {"name": "city", "strict": True,
+        "schema": {"type": "object", "required": ["city", "population"],
+                   "properties": {"city": {"type": "string"},
+                                  "population": {"type": "integer", "maximum": 10**9}}}}})
+json.loads(r.choices[0].message.content)
+```
+
+Things to know:
+- A response cut off by `max_tokens` (`finish_reason: "length"`) is a valid JSON prefix, not a
+  complete document. Small models can repeat digits or string characters until the limit, so
+  bounds in the schema (`maximum`, `maxLength`, `maxItems`) help.
+- Stop sequences still apply and can end the output early.
+- The first constrained request on a model builds llguidance's view of the vocabulary (about
+  a second for a 150k vocabulary). The cost per token is in [bench/RESULTS.md](bench/RESULTS.md).
+- A schema llguidance can't compile gets a 400. With `strict: true`, unsupported keywords are
+  errors; without it they are ignored.
+
 ## How it works
 
 The scheduler (`engine/scheduler.py`) batches at each iteration, following TGI v1. It admits
@@ -258,6 +288,10 @@ caches work and what differs from the torch path.
   - A failure injected in layer 17 is cropped cleanly.
   - With a shared system prompt and the prefix cache on, the batched greedy tokens match the
     uncached one-at-a-time run.
+- `make test` also covers `response_format` (a fake model with a small JSON vocabulary: every
+  output that stops parses and matches its schema, including after preemption).
+- On the real models (`make test-model`, `make test-mlx`): batched JSON-schema generation on
+  SmolLM2-135M and Qwen2.5-0.5B.
 - CI runs lint and unit tests. It also runs the Docker image with `--network none` against the
   pinned weights (see `.github/workflows/ci.yml`). CI does not download models for the unit job.
 
@@ -282,6 +316,8 @@ caches work and what differs from the torch path.
   allocation steps, recurrent state), and the KV in use is read off the cache arrays. After
   rows leave, the trimmed arrays are views of the old buffers, so the figure can be a little low
   until the next reallocation.
+- Constrained decoding computes each row's token mask on the CPU, one row at a time, in the
+  compute thread.
 - Docker on a Mac is CPU-only (no Metal in containers).
 - The CUDA path, NVML utilization, bitsandbytes quantization and `docker-compose.gpu.yml` are
   written but not tested. There is no NVIDIA GPU here, and the CUDA row in the results says
@@ -310,9 +346,10 @@ caches work and what differs from the torch path.
 ## Layout
 
 ```
-src/localhost_ai/   engine/ (scheduler, controller, kv, runner, sampling, detok), api/, models/,
-                    memory.py, metrics.py, cli.py
-bench/              loadgen.py, mempressure.py, report.py, results/, figures/, RESULTS.md
+src/localhost_ai/   engine/ (scheduler, controller, kv, runner, sampling, constrain, detok),
+                    api/, models/, memory.py, metrics.py, cli.py
+bench/              loadgen.py, baseline.py, mempressure.py, report.py, results/, figures/,
+                    RESULTS.md
 deploy/             prometheus, grafana (provisioning + dashboard generator), edge proxy
 tests/              unit tests, fakes, simulator
 docs/               architecture.md, controller.md, verification.md, figures/, results/
@@ -320,9 +357,9 @@ docs/               architecture.md, controller.md, verification.md, figures/, r
 
 ## Credits and license
 
-Built on PyTorch, Hugging Face Transformers, FastAPI, prometheus-client, Prometheus and Grafana.
-The continuous-batching approach follows Hugging Face TGI v1 (concatenate/filter), and recompute
-preemption follows vLLM. The default model is SmolLM2-135M-Instruct by Hugging Face
-(Apache-2.0). The optional MLX presets are mlx-community conversions of Qwen2.5 and Qwen3.5
-(Apache-2.0) and Gemma 4 (Gemma terms of use); they are downloaded, not redistributed here.
-The code is MIT licensed (see `LICENSE`).
+Built on PyTorch, Hugging Face Transformers, MLX and mlx-lm, llguidance, FastAPI,
+prometheus-client, Prometheus and Grafana. The continuous-batching approach follows Hugging
+Face TGI v1 (concatenate/filter), and recompute preemption follows vLLM. The default model is
+SmolLM2-135M-Instruct by Hugging Face (Apache-2.0). The optional MLX presets are mlx-community
+conversions of Qwen2.5 and Qwen3.5 (Apache-2.0) and Gemma 4 (Gemma terms of use); they are
+downloaded, not redistributed here. The code is MIT licensed (see `LICENSE`).

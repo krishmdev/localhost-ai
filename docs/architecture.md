@@ -219,6 +219,40 @@ here the KV is small next to the weights (Qwen3.5-9B measures 32 KiB of KV per t
 4.7 GiB of weights, so 16 rows of 300 tokens is about 150 MiB). Prefix caching gets the prefill
 savings that matter for the shared-system-prompt workload without it.
 
+## Sampling (`engine/sampling.py`)
+
+Both backends hand CPU float32 logits to one `sample()`, which is where per-row temperature,
+top-k, top-p, seeds and `response_format` masks are applied. Greedy rows take the argmax. For
+sampled rows the nucleus is looked for among the top 256 logits (`topk`), with probabilities
+taken relative to the full row's logsumexp. If those 256 hold at least top-p of the mass, or
+top-k already cuts inside them, the result is the same as sorting the whole vocabulary.
+Otherwise that row falls back to the full sort. Pure temperature sampling (top-p 1, no top-k)
+draws from the full softmax without sorting. The old sampler sorted all 151,936 Qwen logits
+for every sampled row, which took about as long as the model's decode step. The measurement is
+in [bench/RESULTS.md](../bench/RESULTS.md), and `tests/test_sampling.py` checks the new
+distribution against the full sort on flat and peaked logits.
+
+## Constrained decoding (`engine/constrain.py`)
+
+`response_format` compiles to an llguidance grammar: `json_object` is the JSON schema
+`{"type": "object"}`, and `json_schema` uses the request's schema (`strict` makes unsupported
+keywords an error). Whitespace between tokens is limited to runs of 24 characters, so a model
+can pretty-print but can't pad forever. The API builds one `LLMatcher` per request at submit
+time, so a bad schema is a 400 before anything is queued. The matcher travels on the `Request`.
+
+At every sample, each constrained row's matcher writes the allowed-token bitmask. `constrain()`
+turns it into a boolean mask over the logits and sets the rest to -inf, and after the pick the
+matcher consumes the token. Logit columns past the tokenizer's vocabulary (embedding padding)
+are never allowed. Once the grammar is complete only the EOS tokens are allowed, so the row
+ends and the scheduler finishes it with `stop`. Because the matcher advances only when a token
+is accepted, preemption and recompute leave it in step with `generated`: the recomputed prefill
+doesn't sample the old tokens again.
+
+The llguidance tokenizer is built from the Hugging Face tokenizer (`llguidance.hf`) the first
+time a model sees a constrained request. `tests/test_constrain_model.py` checks that this works
+with the tokenizer of every preset (SmolLM2, Qwen2.5, Llama 3.2, Gemma 4, Qwen3.5): real JSON
+tokenizations are accepted, and ordinary text can't start a JSON answer.
+
 ## Names for latency
 
 | name | what it is | where |
