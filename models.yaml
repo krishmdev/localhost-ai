@@ -45,3 +45,12 @@ models:
     backend: mlx
     quantization: mlx4
     max_new_tokens: 256
+  # Same model family and size as Ollama's qwen2.5:3b-instruct (Q4_K_M GGUF), for the baseline
+  # comparison against other local servers in bench/RESULTS.md.
+  qwen2.5-3b-mlx4:
+    repo: mlx-community/Qwen2.5-3B-Instruct-4bit
+    revision: 4f83f8f146fdf28b512a06562b671d7af4fab457
+    license: qwen-research
+    backend: mlx
+    quantization: mlx4
+    max_new_tokens: 256
