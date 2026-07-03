@@ -13,4 +13,4 @@ trap 'kill $pid 2>/dev/null; wait $pid 2>/dev/null' EXIT
 uv run python bench/loadgen.py --url "http://127.0.0.1:$port" --label "$label" \
   --calibrate-slo "${SLO_FACTOR:-3}" --modes "${MODES:-fixed:1,fixed:32,aimd}" \
   --concurrency "${CONCURRENCY:-1,4,8,16,32,64}" --max-tokens "${MAX_TOKENS:-128}" \
-  --duration "${DURATION:-45}" --out "$out"
+  --duration "${DURATION:-45}" ${SYSTEM:+--system "$SYSTEM"} --out "$out"
