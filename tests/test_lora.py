@@ -160,6 +160,26 @@ class _Tok:
         return "".join(chr(97 + i % 26) for i in ids)
 
 
+def test_prefix_cache_serves_base_rows_and_adapter_rows_skip_it(adapters):
+    from localhost_ai.engine.prefix import PrefixCache
+
+    model = tiny_llama()
+    aset = install(model, [AdapterSpec.from_path(n, p) for n, p in adapters.items()])
+    ref = LoRAMLXRunner(model, eos_ids=frozenset({0}), adapters=aset)
+    cached = LoRAMLXRunner(model, eos_ids=frozenset({0}), adapters=aset,
+                           prefix_cache=PrefixCache(budget_bytes=1 << 26, min_tokens=4))
+    shared = list(range(40, 52))  # a 12-token "system prompt" every row starts with
+    prompts = [shared + p for p in PROMPTS]
+    want = [alone(ref, p, f, a) for p, f, a in zip(prompts, FORCED, ROUTE, strict=True)]
+    for _ in range(2):  # the first round stores the prefix, the second hits it
+        for p, f, a, w in zip(prompts, FORCED, ROUTE, want, strict=True):
+            for got, exp in zip(alone(cached, p, f, a), w, strict=True):
+                assert_close(got, exp)
+        state, logits = cached.prefill(prompts, adapters=[None] * 4)  # base rows, grouped
+        assert state.slots == [0] * 4
+    assert cached.prefix.hits > 0
+
+
 def test_unknown_adapter_and_bad_files(runner, adapters, tmp_path):
     with pytest.raises(KeyError, match="unknown adapter"):
         runner.prefill([[1, 2]], adapters=["nope"])

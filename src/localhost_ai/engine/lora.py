@@ -186,11 +186,19 @@ def install(model: nn.Module, specs: list[AdapterSpec]) -> AdapterSet:
     return AdapterSet([s.name for s in specs], rows, [p for p, _ in wrapped])
 
 
+def _slots(state: Any) -> list[int]:
+    # batches built inside MLXModelRunner (prefix-cache groups) have no slots yet: base rows
+    return getattr(state, "slots", None) or [0] * len(state.lengths)
+
+
 class LoRAMLXRunner(MLXModelRunner):
     """MLXModelRunner whose rows can each use a different adapter. The batch state carries one
     adapter slot per row (`state.slots`) through merge and select, and the slots are handed to
     the wrapped layers before every forward pass. Requests without an adapter run the base
-    model unchanged, alone or in a batch with adapter rows."""
+    model unchanged, alone or in a batch with adapter rows.
+
+    Stored prompt prefixes (engine/prefix.py) hold base-model KV, so a prefill with any adapter
+    row skips the prefix cache; base-only prefills use it as usual."""
 
     def __init__(self, model: Any, eos_ids: frozenset[int], adapters: AdapterSet,
                  **kw: Any) -> None:
@@ -200,20 +208,24 @@ class LoRAMLXRunner(MLXModelRunner):
     def prefill(self, seqs: list[list[int]], adapters: list[str | None] | None = None):
         slots = [self.adapters.slot(a) for a in adapters] if adapters else [0] * len(seqs)
         self.adapters.use(slots)
-        state, logits = super().prefill(seqs)
+        if any(slots):
+            state, logits = self._prefill(seqs, None)
+        else:
+            state, logits = super().prefill(seqs)
         state.slots = slots
         return state, logits
 
     def decode(self, state: Any, tokens: list[int]):
-        self.adapters.use(state.slots)
+        self.adapters.use(_slots(state))
         return super().decode(state, tokens)
 
     def merge(self, a: Any, b: Any):
         out = super().merge(a, b)
-        out.slots = a.slots + b.slots
+        out.slots = _slots(a) + _slots(b)
         return out
 
     def select(self, state: Any, keep: list[int]):
+        slots = _slots(state)
         out = super().select(state, keep)
-        out.slots = [state.slots[i] for i in keep]
+        out.slots = [slots[i] for i in keep]
         return out
