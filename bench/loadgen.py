@@ -97,8 +97,11 @@ def cpu_idle() -> float | None:
 
 
 async def one_request(client: httpx.AsyncClient, prompt: str, max_tokens: int,
-                      seed: int) -> Result:
-    body = {"messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens,
+                      seed: int, system: str = "") -> Result:
+    messages = [{"role": "user", "content": prompt}]
+    if system:
+        messages.insert(0, {"role": "system", "content": system})
+    body = {"messages": messages, "max_tokens": max_tokens,
             "temperature": 0.7, "top_p": 0.95, "seed": seed, "stream": True,
             "stream_options": {"include_usage": True}}
     t0 = time.perf_counter()
@@ -163,6 +166,9 @@ async def telemetry(url: str, token: str, sink: list, stop: asyncio.Event, t_ori
                     "headroom_frac": mem.get("headroom_frac"),
                     "mem_used_bytes": mem.get("used_bytes"),
                     "action": d.get("action"),
+                    **({"prefix_bytes": msg["prefix_bytes"],
+                        "prefix_hit_tokens": msg.get("prefix_hit_tokens")}
+                       if "prefix_bytes" in msg else {}),
                 })
 
 
@@ -196,7 +202,8 @@ async def run_point(url: str, mode: str, conc: int, args, prompts: list[str],
         async def worker(wid: int) -> None:
             while time.perf_counter() < deadline:
                 p = prompts[rng.randrange(len(prompts))]
-                r = await one_request(client, p, args.max_tokens, rng.randrange(1 << 30))
+                r = await one_request(client, p, args.max_tokens, rng.randrange(1 << 30),
+                                      args.system_text)
                 results.append(r)
                 if r.status in ("ConnectError", "RemoteProtocolError", "ReadError"):
                     await asyncio.sleep(0.5)  # server gone or restarting; don't spin
@@ -256,7 +263,7 @@ async def preflight(url: str, token: str) -> dict:
     mem = snap.get("memory") or {}
     out = {"device": snap.get("device"), "dtype": snap.get("dtype"), "memory": mem,
            "host_swap": swap.stdout.strip() or None, "warnings": []}
-    for key in ("backend", "quant", "kv_bytes_per_token", "row_state_bytes"):
+    for key in ("backend", "quant", "kv_bytes_per_token", "row_state_bytes", "prefix_cache"):
         if key in snap:
             out[key] = snap[key]
     limit = mem.get("limit_bytes") or 0
@@ -339,6 +346,7 @@ def manifest(cmd: str | None, extra: dict) -> dict:
 async def main_async(args) -> dict:
     prompts = [json.loads(line)["prompt"] for line in Path(args.prompts).read_text().splitlines()
                if line.strip()]
+    args.system_text = Path(args.system).read_text().strip() if args.system else ""
     await wait_ready(args.url)
     async with httpx.AsyncClient(base_url=args.url, timeout=10) as c:
         models = (await c.get("/v1/models")).json()
@@ -383,8 +391,8 @@ async def main_async(args) -> dict:
         "label": args.label,
         "throughput_source": "server_counter",
         "started": started,
-        "config": {k: (Path(v).name if k in ("prompts", "manifest") and v else v)
-                   for k, v in vars(args).items() if k not in ("admin_token",)},
+        "config": {k: (Path(v).name if k in ("prompts", "manifest", "system") and v else v)
+                   for k, v in vars(args).items() if k not in ("admin_token", "system_text")},
         "model": models["data"][0],
         "slo_tpot_ms": slo,
         "calibration": calibration,
@@ -405,6 +413,8 @@ def parse(argv: list[str] | None = None):
     ap.add_argument("--settle", type=float, default=2.0)
     ap.add_argument("--max-tokens", type=int, default=128)
     ap.add_argument("--prompts", default=str(HERE / "prompts.jsonl"))
+    ap.add_argument("--system", default=None,
+                    help="text file sent as the system message of every request")
     ap.add_argument("--slo-tpot-ms", type=float, default=None)
     ap.add_argument("--calibrate-slo", type=float, default=None,
                     help="set the SLO to this multiple of single-request p50 TPOT")
