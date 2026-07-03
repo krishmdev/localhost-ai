@@ -123,7 +123,8 @@ async def ws_generate(ws: WebSocket) -> None:
                 body = ChatCompletionRequest(**{k: v for k, v in msg.items()
                                                 if k not in ("type", "id")})
                 handle = submit(svc, [m.model_dump() for m in body.messages],
-                                lambda n, b=body: sampling_params(b, n, svc))
+                                lambda n, b=body: sampling_params(b, n, svc),
+                                body.response_format)
             except ValidationError as exc:
                 await conn.send({"type": "error", "id": rid, "code": "invalid_request",
                                  "message": exc.errors()[0]["msg"]})

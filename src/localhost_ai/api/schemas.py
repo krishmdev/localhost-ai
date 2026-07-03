@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatMessage(BaseModel):
@@ -14,6 +14,31 @@ class ChatMessage(BaseModel):
 
 class StreamOptions(BaseModel):
     include_usage: bool = False
+
+
+class JSONSchemaFormat(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = "response"
+    description: str | None = None
+    schema_: dict | None = Field(None, alias="schema")
+    strict: bool | None = False
+
+
+class ResponseFormat(BaseModel):
+    """`text` (the default), `json_object` (any JSON object) or `json_schema`. The JSON types are
+    enforced token by token, so a response that finishes with `stop` always parses."""
+
+    type: Literal["text", "json_object", "json_schema"] = "text"
+    json_schema: JSONSchemaFormat | None = None
+
+    def as_dict(self) -> dict | None:
+        if self.type == "text":
+            return None
+        out: dict = {"type": self.type}
+        if self.json_schema is not None:
+            out["json_schema"] = self.json_schema.model_dump(by_alias=True)
+        return out
 
 
 class ChatCompletionRequest(BaseModel):
@@ -30,6 +55,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     stream_options: StreamOptions | None = None
     user: str | None = None
+    response_format: ResponseFormat | None = None
 
 
 class Usage(BaseModel):

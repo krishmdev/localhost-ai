@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ..engine.constrain import GrammarError
 from ..engine.engine import Handle
 from ..engine.request import DoneEvent, ErrorEvent, SamplingParams, TokenEvent
 from ..engine.scheduler import QueueFull
@@ -23,6 +24,7 @@ from .schemas import (
     Delta,
     ModelCard,
     ModelList,
+    ResponseFormat,
     Timings,
     Usage,
 )
@@ -47,7 +49,8 @@ def sampling_params(body: ChatCompletionRequest, prompt_len: int, svc: Service) 
                           max_tokens=min(wanted, room), stop=stop, seed=body.seed)
 
 
-def submit(svc: Service, messages: list[dict[str, str]], params_for) -> Handle:
+def submit(svc: Service, messages: list[dict[str, str]], params_for,
+           response_format: ResponseFormat | None = None) -> Handle:
     """Shared by REST and WebSocket. Raises QueueFull / HTTPException."""
     if svc.swapping:
         raise HTTPException(503, "model is being replaced; retry shortly")
@@ -55,7 +58,20 @@ def submit(svc: Service, messages: list[dict[str, str]], params_for) -> Handle:
         raise HTTPException(503, "no model is loaded")
     ids = svc.parts.encode_chat(messages)
     params = params_for(len(ids))
-    return svc.engine.submit(ids, params)
+    return svc.engine.submit(ids, params, constraint_for(svc, response_format))
+
+
+def constraint_for(svc: Service, fmt: ResponseFormat | None):
+    """The token-level constraint for a response_format, None for plain text."""
+    spec = fmt.as_dict() if fmt is not None else None
+    if spec is None:
+        return None
+    if svc.parts.grammars is None:
+        raise HTTPException(400, "response_format is not supported for this model")
+    try:
+        return svc.parts.grammars.constraint(spec)
+    except GrammarError as exc:
+        raise HTTPException(400, f"invalid response_format: {exc}") from exc
 
 
 def usage(done: DoneEvent) -> Usage:
@@ -86,7 +102,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                      "invalid_request_error", "model_not_found")
     messages = [m.model_dump() for m in body.messages]
     try:
-        handle = submit(svc, messages, lambda n: sampling_params(body, n, svc))
+        handle = submit(svc, messages, lambda n: sampling_params(body, n, svc),
+                        body.response_format)
     except QueueFull as exc:
         svc.metrics.rejected()
         return error(429, str(exc), "rate_limit_error", "queue_full",

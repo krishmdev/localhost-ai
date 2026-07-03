@@ -195,3 +195,83 @@ def test_bad_schemas_raise_grammar_error():
     with pytest.raises(GrammarError):
         GRAMMARS.constraint({"type": "json_schema", "json_schema": {"schema": [1, 2]}})
 
+
+# --- the OpenAI API ---------------------------------------------------------------------------
+
+@pytest.fixture
+async def json_sdk():
+    import httpx
+    from openai import AsyncOpenAI
+
+    from localhost_ai.api.app import create_app
+    from localhost_ai.config import Settings
+    from localhost_ai.memory import FakeProbe
+    from localhost_ai.metrics import EngineMetrics
+    from localhost_ai.service import ModelParts, Service
+
+    parts = ModelParts(name="fake-json", runner=JSONRunner(eos_ids=frozenset({EOS}), t0=0.001),
+                       tokenizer=JSONTokenizer(), encode_chat=lambda msgs: [1, 2, 3],
+                       default_max_tokens=96, grammars=GRAMMARS,
+                       info={"model": "fake-json", "repo": "test/fake-json", "device": "cpu",
+                             "dtype": "fp32", "quant": "none"})
+    svc = Service(settings=Settings(control_interval_s=0.2, max_context=256), parts=parts,
+                  probe=FakeProbe(limit=1 << 30, used=1 << 28), metrics=EngineMetrics(),
+                  model_names=["fake-json"])
+    app = create_app(svc)
+    svc.start()
+    http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost")
+    yield AsyncOpenAI(api_key="unused", base_url="http://localhost/v1", http_client=http)
+    await http.aclose()
+    svc.stop()
+
+
+MSG = [{"role": "user", "content": "a person as json"}]
+
+
+async def test_sdk_json_schema_non_streaming(json_sdk):
+    stopped = 0
+    for seed in range(4):
+        r = await json_sdk.chat.completions.create(
+            model="fake-json", messages=MSG, seed=seed, temperature=1.0,
+            response_format=PERSON)
+        if r.choices[0].finish_reason == "stop":
+            stopped += 1
+            obj = json.loads(r.choices[0].message.content)
+            assert set(obj) == {"name", "age"}
+    assert stopped >= 2
+
+
+async def test_sdk_json_object_streaming(json_sdk):
+    stream = await json_sdk.chat.completions.create(
+        model="fake-json", messages=MSG, seed=1, temperature=1.0, stream=True,
+        response_format={"type": "json_object"})
+    chunks = [c async for c in stream]
+    body = "".join(c.choices[0].delta.content or "" for c in chunks if c.choices)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    assert isinstance(json.loads(body), dict)
+
+
+async def test_sdk_rejects_a_bad_schema(json_sdk):
+    import openai
+
+    with pytest.raises(openai.BadRequestError, match="invalid response_format"):
+        await json_sdk.chat.completions.create(
+            model="fake-json", messages=MSG,
+            response_format={"type": "json_schema",
+                             "json_schema": {"name": "x", "schema": {"type": "nope"}}})
+
+
+def test_models_without_grammar_support_get_a_400():
+    from fakes import fake_service
+    from fastapi.testclient import TestClient
+
+    from localhost_ai.api.app import create_app
+
+    with TestClient(create_app(fake_service())) as c:
+        r = c.post("/v1/chat/completions", json={"messages": MSG,
+                                                 "response_format": {"type": "json_object"}})
+        assert r.status_code == 400
+        assert "not supported" in r.json()["error"]["message"]
+        r = c.post("/v1/chat/completions", json={"messages": MSG, "max_tokens": 2,
+                                                 "response_format": {"type": "text"}})
+        assert r.status_code == 200

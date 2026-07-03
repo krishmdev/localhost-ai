@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import Settings
+from .engine.constrain import Grammars
 from .engine.controller import AIMDConfig, AIMDController, Controller, FixedController
 from .engine.engine import AsyncEngine
 from .engine.prefix import PrefixCache
@@ -30,6 +31,9 @@ class ModelParts:
     # Memory probe for this model's backend (an MLX model needs MLX's allocator stats, not
     # torch.mps's). None means the service-wide probe.
     probe: MemoryProbe | None = None
+    # Builds response_format constraints for this tokenizer (engine/constrain.py). None means
+    # the model can't do constrained decoding and such requests get a 400.
+    grammars: Any = None
 
 
 def aimd_config(s: Settings) -> AIMDConfig:
@@ -181,6 +185,7 @@ def build_from_settings(s: Settings) -> Service:
         return ModelParts(
             name=spec.name, runner=m.runner, tokenizer=m.tokenizer, encode_chat=m.encode_chat,
             default_max_tokens=spec.max_new_tokens, probe=probe(spec.backend),
+            grammars=Grammars.from_hf(m.tokenizer, m.runner.eos_ids),
             info={"model": spec.name, "repo": spec.repo, "revision": spec.revision,
                   "backend": spec.backend,
                   "device": "metal" if spec.backend == "mlx" else dev.kind,
