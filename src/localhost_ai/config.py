@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     max_prefill_tokens_per_step: int = Field(2048, ge=1)
     max_context: int = Field(2048, ge=2)
     default_max_tokens: int = 256
+    # Prefix caching (engine/prefix.py): reuse the prefill of a prompt prefix that recent
+    # requests share, e.g. a long system prompt. Off by default: rows that start from a stored
+    # prefix are computed in a different order, so on low-precision backends their logits can
+    # differ in the last bits from a full prefill.
+    prefix_cache: bool = False
+    prefix_cache_mb: int = Field(512, ge=1)
+    prefix_min_tokens: int = Field(32, ge=1)
 
     admin_token: str = ""
     # Host headers the server answers to (DNS-rebinding guard), comma-separated; "server" is

@@ -11,6 +11,7 @@ from typing import Any
 from .config import Settings
 from .engine.controller import AIMDConfig, AIMDController, Controller, FixedController
 from .engine.engine import AsyncEngine
+from .engine.prefix import PrefixCache
 from .engine.scheduler import Scheduler, SchedulerConfig
 from .memory import MemoryProbe
 from .metrics import EngineMetrics
@@ -174,6 +175,9 @@ def build_from_settings(s: Settings) -> Service:
     def loader(name: str) -> ModelParts:
         spec = registry.get(name)
         m = load(spec, dev, s.models_dir, s.quantization, s.dtype)
+        if s.prefix_cache:
+            m.runner.prefix = PrefixCache(budget_bytes=s.prefix_cache_mb << 20,
+                                          min_tokens=s.prefix_min_tokens)
         return ModelParts(
             name=spec.name, runner=m.runner, tokenizer=m.tokenizer, encode_chat=m.encode_chat,
             default_max_tokens=spec.max_new_tokens, probe=probe(spec.backend),
@@ -182,7 +186,8 @@ def build_from_settings(s: Settings) -> Service:
                   "device": "metal" if spec.backend == "mlx" else dev.kind,
                   "dtype": m.dtype_name, "quant": m.quant, "threads": str(dev.threads),
                   "kv_bytes_per_token": str(m.runner.kv_bytes_per_token),
-                  "row_state_bytes": str(getattr(m.runner, "row_state_bytes", 0))},
+                  "row_state_bytes": str(getattr(m.runner, "row_state_bytes", 0)),
+                  "prefix_cache": f"{s.prefix_cache_mb} MiB" if s.prefix_cache else "off"},
         )
 
     parts = loader(s.model)
