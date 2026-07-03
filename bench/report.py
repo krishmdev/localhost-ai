@@ -13,6 +13,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+import features_report  # noqa: E402
 import plotstyle  # noqa: E402
 
 plt = plotstyle.plt
@@ -314,6 +315,7 @@ def main() -> None:
         png = plot_mem(mp, fig, f" ({heading.lower()})")
         out += ["", f"![memory pressure](figures/{png})", "",
                 f"Host: {host_line(mp['manifest'])}", ""]
+    out += features_report.sections(host_line)  # other servers, sampler, response_format
     (HERE / "RESULTS.md").write_text("\n".join(out))
     traces = [f"![AIMD trace, {TARGET_NAMES[lbl]}](../bench/figures/aimd_trace_{lbl}.png)"
               for lbl in ("mps-native", "cpu-docker") if (FIG / f"aimd_trace_{lbl}.png").exists()]
