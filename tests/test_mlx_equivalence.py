@@ -80,3 +80,37 @@ def test_batched_matches_sequential(loaded):
 def test_answers_are_text(loaded):
     out = run(loaded, ["What is the capital of France? Answer in one word."], limit=1)[0]
     assert "Paris" in loaded.tokenizer.decode(out)
+
+
+SYSTEM = ("You are a careful assistant for a small team. Answer in plain English, keep answers "
+          "short, say when you are unsure, and never invent facts, names, numbers or sources. "
+          "If a question is ambiguous, answer the most likely reading and say so.")
+
+
+def test_prefix_cache_gives_the_same_greedy_tokens(loaded):
+    from localhost_ai.engine.prefix import PrefixCache
+
+    msgs = [[{"role": "system", "content": SYSTEM}, {"role": "user", "content": p}]
+            for p in PROMPTS]
+
+    def go(limit, rows):
+        sched = Scheduler(loaded.runner, loaded.tokenizer, FixedController(limit))
+        params = SamplingParams(temperature=0.0, max_tokens=N_TOKENS)
+        reqs = [Request(loaded.encode_chat(m), params) for m in rows]
+        for r in reqs:
+            sched.add(r)
+        while sched.has_work():
+            sched.step()
+        return [r.generated for r in reqs]
+
+    alone = [go(1, [m])[0] for m in msgs]
+    loaded.runner.prefix = pc = PrefixCache(budget_bytes=1 << 30, min_tokens=16)
+    try:
+        cached = go(len(msgs), msgs)
+    finally:
+        loaded.runner.prefix = None
+        loaded.runner.release()
+    assert pc.hits >= len(msgs) - 1
+    for p, a, b in zip(PROMPTS, alone, cached, strict=True):
+        same = next((i for i, (x, y) in enumerate(zip(a, b, strict=False)) if x != y), None)
+        assert a == b, f"{p!r}: diverged at token {same}"
