@@ -19,7 +19,7 @@ flowchart LR
     sch[continuous-batching scheduler] -->|decode-step time| ctl[AIMD controller]
     mem[memory probe: CUDA / MPS / cgroup] --> ctl
     ctl -->|batch limit L| sch
-    sch --> hf[HF Transformers model + KV cache]
+    sch --> hf[HF Transformers model + KV cache, or MLX 4-bit model + mlx-lm caches]
   end
   eng --> sch
   api -->|/metrics| prom[Prometheus] --> graf[Grafana]
@@ -35,6 +35,18 @@ make demo           # offline: start the server, REST + SSE + WebSocket round tr
 make test           # unit tests with a fake model (no weights needed)
 make test-model     # batched == sequential greedy tokens, preemption, crop, on the real model
 ```
+
+Quantized models on Apple silicon go through MLX (bitsandbytes is CUDA only):
+
+```bash
+make setup-mlx      # adds the mlx extra and the 4-bit Qwen2.5-0.5B preset
+make test-mlx       # batched == sequential greedy tokens on the 4-bit checkpoint
+LHAI_MODEL=qwen2.5-0.5b-mlx4 uv run lhai serve --port 8000
+```
+
+The larger MLX presets, `gemma-4-e4b-mlx4` (5.2 GB download) and `qwen3.5-9b-mlx4` (6.0 GB), are
+fetched with `LHAI_MODEL=<preset> uv run lhai models pull`, and
+`LHAI_MLX_PRESETS=qwen3.5-9b-mlx4,gemma-4-e4b-mlx4 make test-mlx` runs the same check on them.
 
 Run the server natively (Apple GPU on a Mac, CUDA if present, else CPU):
 
@@ -144,6 +156,12 @@ CUDA, and from the Metal limit capped by what macOS can still hand out on Apple 
 utilization is reported on NVIDIA only. On MPS and CPU the utilization signal is the engine's
 busy ratio.
 
+With `LHAI_PREFIX_CACHE=1` the server also caches shared prompt prefixes (`engine/prefix.py`).
+When two recent prompts start with the same 32 or more tokens, typically a system prompt, that
+prefix is computed once and stored. Later rows start from a copy of its cache and prefill only
+the rest of their prompt. Stored prefixes count as used memory, stay under a size cap, and are
+the first thing dropped under memory pressure. Both the torch and the MLX runner support it.
+
 More detail: [docs/architecture.md](docs/architecture.md).
 
 ## Results
@@ -189,40 +207,81 @@ Environment variables, prefix `LHAI_` (see `src/localhost_ai/config.py`):
 - `MODEL`: preset from `models.yaml`.
 - `DEVICE`: auto, cuda, mps or cpu.
 - `DTYPE`.
-- `QUANTIZATION`: bnb8 or bnb4, CUDA only.
+- `QUANTIZATION`: bnb8 or bnb4, CUDA only. On Apple silicon, pick an MLX preset instead.
 - `CONTROLLER`: aimd or fixed.
 - `FIXED_BATCH`, `INITIAL_BATCH` (16), `MIN_BATCH`, `MAX_BATCH` (64).
 - `SLO_TPOT_MS` (100).
 - `MEM_LOW_WM` (0.10), `MEM_HIGH_WM` (0.20), `MEM_RESERVE` (0.15).
 - `CONTROL_INTERVAL_S` (1), `N_MIN` (20).
 - `MAX_QUEUE` (256), `MAX_PREFILL_TOKENS_PER_STEP` (2048), `MAX_CONTEXT` (2048).
+- `PREFIX_CACHE` (off), `PREFIX_CACHE_MB` (512), `PREFIX_MIN_TOKENS` (32): reuse the prefill
+  of a prompt prefix that recent requests share, such as a long system prompt.
 - `ADMIN_TOKEN`, `ALLOWED_HOSTS`.
 - `MEM_LIMIT_BYTES`: pretend-budget for native runs.
 
 Models are pinned in `models.yaml` (repo and commit) and hashed in `models.lock`.
-`lhai models pull --all` also fetches SmolLM2-360M and Qwen2.5-0.5B.
+`lhai models pull --all` also fetches SmolLM2-360M, Qwen2.5-0.5B and the three MLX presets
+(about 13 GB with the default model).
+
+A preset with `backend: mlx` names a pre-quantized MLX checkpoint (`quantization: mlx4` or
+`mlx8`, checked against the checkpoint's `config.json` on load) and runs through
+`engine/mlx_runner.py` with the same scheduler and controller. Its memory probe reads MLX's
+allocator instead of torch.mps. `chat_template_kwargs` in a preset is passed to the chat
+template (the Qwen3.5 preset turns thinking off with it). See
+[docs/architecture.md](docs/architecture.md#mlx-backend-enginemlx_runnerpy) for how the batch
+caches work and what differs from the torch path.
 
 ## Tests
 
-- `make test`: about 190 tests with a deterministic fake model. They cover the controller rules
-  and the S1-S6 simulator bounds over 20 seeds, the scheduler (FIFO, stop strings, cancel, 429,
-  OOM preemption equivalence, merge OOM, no OOM thrash, a prefill-heavy closed loop), KV
-  merge/select/crop, sampling, detokenization, probes, the OpenAI SDK against the app, SSE
-  framing, WebSockets and metrics.
+- `make test`: 288 tests, most with a deterministic fake model. Without the mlx extra (any
+  machine that isn't Apple silicon) the 52 MLX tests skip and 236 run. They cover the
+  controller rules and the S1-S6 simulator bounds over 20 seeds, the scheduler (FIFO, stop
+  strings, cancel, 429, OOM preemption equivalence, merge OOM, no OOM thrash, a prefill-heavy
+  closed loop), KV merge/select/crop, sampling, detokenization, probes, the OpenAI SDK against
+  the app, SSE framing, WebSockets and metrics. On Apple silicon with the mlx extra it also runs the MLX
+  runner against tiny random-weight Llama, Qwen3.5 and Gemma 4 models built in-process. Batched
+  logits are compared against the model's own single-sequence caches, through joins, row
+  selection, chunked prefill and the lost-cache path. For the hybrid Qwen3.5 it checks that pad
+  tokens stay out of the recurrent state; for Gemma 4 it runs past a 4-token sliding window with
+  KV-sharing layers. The scheduler is also run on those models: seeded sampling alone and in a
+  batch, an injected allocation failure that forces a whole-batch recompute, and a cancel. The
+  CI workflow has a macOS job for these on MLX's CPU backend (`LHAI_MLX_DEVICE=cpu`); they pass
+  that way locally, but the job hasn't run on GitHub yet.
+- `make test-mlx` runs the batched-vs-sequential greedy check through the scheduler on the real
+  4-bit checkpoints, plus the same check with the prefix cache on and a shared system prompt.
+  All 9 cases passed on the three MLX presets.
 - `make test-model` runs on the real SmolLM2-135M on CPU fp32:
   - Five mixed-length prompts with a mid-stream join produce exactly the same 32 greedy tokens
     batched as one at a time.
   - Logits after a merge match a solo run.
   - A preempted request finishes with the same tokens.
   - A failure injected in layer 17 is cropped cleanly.
+  - With a shared system prompt and the prefix cache on, the batched greedy tokens match the
+    uncached one-at-a-time run.
 - CI runs lint and unit tests. It also runs the Docker image with `--network none` against the
   pinned weights (see `.github/workflows/ci.yml`). CI does not download models for the unit job.
 
 ## Limitations
 
 - No paged attention. The KV cache is one padded tensor per layer, so mixed lengths waste
-  memory. The KV budget and ceiling count the padding.
+  memory. The KV budget and ceiling count the padding. docs/architecture.md has the design
+  and why it isn't built on top of mlx-lm's cache classes.
+- Prefix caching saves prefill, not memory: each row still holds its own copy of the prefix
+  KV. It is off by default because a row built on a stored prefix isn't guaranteed bit-identical
+  logits on low-precision backends.
 - One active model at a time. Hot-swap drains the queue first.
+- Quantized models on a Mac need the MLX backend and a pre-quantized mlx-community checkpoint.
+  Nothing is quantized on load there, and MLX presets are text only (the Qwen3.5 vision tower
+  and the Gemma 4 vision and audio towers are dropped). mlx-lm is pinned exactly because the
+  runner uses its cache classes.
+- On MLX a failed forward pass can't be cropped back, so one OOM re-prefills every running row
+  instead of just the newest one, and the batch is rebuilt one row smaller. Running out of
+  unified memory usually shows up as swapping before MLX raises anything, so the probe
+  watermarks and the KV ceiling are what keep it in bounds.
+- MLX memory per row is priced from the cache layout (full vs sliding-window layers, 256-token
+  allocation steps, recurrent state), and the KV in use is read off the cache arrays. After
+  rows leave, the trimmed arrays are views of the old buffers, so the figure can be a little low
+  until the next reallocation.
 - Docker on a Mac is CPU-only (no Metal in containers).
 - The CUDA path, NVML utilization, bitsandbytes quantization and `docker-compose.gpu.yml` are
   written but not tested. There is no NVIDIA GPU here, and the CUDA row in the results says
@@ -264,4 +323,6 @@ docs/               architecture.md, controller.md, verification.md, figures/, r
 Built on PyTorch, Hugging Face Transformers, FastAPI, prometheus-client, Prometheus and Grafana.
 The continuous-batching approach follows Hugging Face TGI v1 (concatenate/filter), and recompute
 preemption follows vLLM. The default model is SmolLM2-135M-Instruct by Hugging Face
-(Apache-2.0). The code is MIT licensed (see `LICENSE`).
+(Apache-2.0). The optional MLX presets are mlx-community conversions of Qwen2.5 and Qwen3.5
+(Apache-2.0) and Gemma 4 (Gemma terms of use); they are downloaded, not redistributed here.
+The code is MIT licensed (see `LICENSE`).
