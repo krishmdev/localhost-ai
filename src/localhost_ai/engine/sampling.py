@@ -17,9 +17,34 @@ def make_generator(seed: int | None) -> torch.Generator:
     return g
 
 
+def constrain(logits: torch.Tensor, constraints: list | None) -> torch.Tensor:
+    """Set the logits a row's constraint (engine/constrain.py) forbids to -inf. Rows without
+    one, and batches without any, are returned untouched."""
+    if not constraints or all(c is None for c in constraints):
+        return logits
+    logits = logits.clone()
+    width = logits.shape[-1]
+    for i, c in enumerate(constraints):
+        if c is not None:
+            logits[i].masked_fill_(~c.allowed(width), float("-inf"))
+    return logits
+
+
 def sample(logits: torch.Tensor, params: list[SamplingParams],
-           generators: list[torch.Generator]) -> list[int]:
-    logits = logits.detach().to("cpu", torch.float32)
+           generators: list[torch.Generator], constraints: list | None = None) -> list[int]:
+    """One token per row. `constraints`, if given, has one entry per row (None for
+    unconstrained rows); each constrained row picks only allowed tokens and its constraint is
+    advanced by the pick."""
+    logits = constrain(logits.detach().to("cpu", torch.float32), constraints)
+    out = _pick(logits, params, generators)
+    for c, t in zip(constraints or (), out, strict=False):
+        if c is not None:
+            c.advance(t)
+    return out
+
+
+def _pick(logits: torch.Tensor, params: list[SamplingParams],
+          generators: list[torch.Generator]) -> list[int]:
     greedy = logits.argmax(dim=-1)
     out = greedy.tolist()
     rows = [i for i, p in enumerate(params) if not p.greedy]

@@ -345,7 +345,8 @@ class Scheduler:
                 self._requeue(new)
             return 0
         padded = len(new) * max(len(r.all_ids) for r in new)
-        tokens = sample(logits, [r.params for r in new], [r.generator for r in new])
+        tokens = sample(logits, [r.params for r in new], [r.generator for r in new],
+                        [r.constraint for r in new])
         keep = [i for i, (r, t) in enumerate(zip(new, tokens, strict=True)) if self._accept(r, t)]
         try:
             if len(keep) < len(new):
@@ -382,7 +383,8 @@ class Scheduler:
             self._release()
             return False
         tokens = sample(logits, [r.params for r in self.running],
-                        [r.generator for r in self.running])
+                        [r.generator for r in self.running],
+                        [r.constraint for r in self.running])
         keep = [i for i, (r, t) in enumerate(zip(self.running, tokens, strict=True))
                 if self._accept(r, t)]
         if len(keep) < len(self.running):

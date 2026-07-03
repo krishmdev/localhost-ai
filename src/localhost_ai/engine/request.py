@@ -70,6 +70,9 @@ class Request:
     # Set by the scheduler; opaque to everyone else.
     detok: object | None = None
     generator: object | None = None
+    # response_format constraint (engine/constrain.py), built at submit time; advanced by
+    # sampling, so it stays in step with `generated` across preemption and recompute.
+    constraint: object | None = None
 
     @property
     def num_prompt(self) -> int:
