@@ -159,6 +159,66 @@ Differences from the torch path:
 
 mlx-lm is pinned exactly (`mlx-lm==0.31.3`) because the batch cache classes are internals.
 
+## Prefix caching (`engine/prefix.py`)
+
+Off by default; `LHAI_PREFIX_CACHE=1` turns it on for both runners.
+
+- **Finding prefixes.** Each prompt that gets prefilled is compared with the last 16. When two
+  share at least `LHAI_PREFIX_MIN_TOKENS` (32) leading tokens, that common prefix is run once
+  on its own and its cache is stored. A long system prompt is found on the second request that
+  carries it. Nothing needs to mark where the system prompt ends, and a prompt that shares a
+  longer prefix with an earlier one only adds an entry when that is at least 16 tokens (and a
+  quarter) longer than the one it already matches.
+- **Using them.** Admitted rows are grouped by the longest stored prefix they start with. Each
+  group's batch cache starts as copies of the stored cache, and only the rest of each prompt is
+  prefilled. On MLX that is mlx-lm's batch `merge` of the single-sequence caches followed by the
+  usual right-padded prefill, the same as if the prefix had been the first prefill chunk, so it
+  works for full-attention, sliding-window and recurrent layers alike. On torch the rows get the
+  prefix KV and their suffixes left-padded after it, so the mask has a hole of padding between
+  prefix and suffix; the attention mask and the cumsum position ids handle it the same way as
+  leading padding. The groups are merged and put back in admission order.
+- **Memory.** Each row still owns a full copy of its KV, so this saves prefill compute and TTFT,
+  not memory per row. The stored entries are extra memory: at most `LHAI_PREFIX_CACHE_MB` (512)
+  and 8 entries, least recently used first out. They are already in the probe's `used`, the
+  admission budget subtracts entries stored since the last tick, and the scheduler drops every
+  entry before it sheds a row under memory pressure and on any OOM.
+- **Equality.** Batched with a cached prefix gives the same greedy tokens as no cache on the
+  tiny test models (all three MLX layouts and torch), on SmolLM2-135M in fp32, and through
+  `make test-mlx` on the 4-bit checkpoints. On low-precision backends the prefix and suffix
+  are computed in different kernel shapes than a full prefill, so bit-identical logits are not
+  guaranteed; that's why it is off by default.
+
+## Paged KV: a design, not built
+
+The KV cache is one padded tensor per layer. Paging it means storing each row's KV in
+fixed-size blocks (say 16 tokens) from a shared pool, with a block table per row, so a row
+holds only its own length rounded up to a block, and rows that share a prefix can point at the
+same blocks instead of copies.
+
+What it would take here:
+- A cache class per layer type that keeps the pool and the block tables and still presents the
+  interface the model code calls: `update_and_fetch` returning K and V for the whole batch,
+  `make_mask`, and per-row offsets for RoPE. mlx-lm's attention calls the fused
+  `scaled_dot_product_attention` on contiguous `[B, heads, T, dim]` arrays; neither MLX 0.32 nor
+  PyTorch on MPS has an attention kernel that reads through a block table.
+- Without such a kernel, every layer gathers its blocks into a padded contiguous tensor on
+  every step. The persistent memory is still paged, so the padding waste is only ever one
+  layer's worth at a time, but each step then copies every layer's KV once more. The other
+  way is a custom paged-attention Metal kernel (`mx.fast.metal_kernel`), with the masking,
+  grouped-query heads and head sizes up to 512 (Gemma 4's full layers) it would need.
+- Recurrent state (Qwen3.5) is fixed per row and gains nothing. Sliding-window layers would
+  recycle blocks as the window moves.
+- Sharing prefix blocks between rows needs reference counts and copy-on-write for the block
+  that a row's own tokens start in.
+
+Why it isn't built: the cache classes are mlx-lm internals that the runner is pinned against,
+and a paged replacement would have to reimplement BatchKVCache, BatchRotatingKVCache and their
+masking for three model families, plus the torch path, before it could be checked against the
+current equality tests. The gain is memory, and with the prompt and output lengths benchmarked
+here the KV is small next to the weights (Qwen3.5-9B measures 32 KiB of KV per token against
+4.7 GiB of weights, so 16 rows of 300 tokens is about 150 MiB). Prefix caching gets the prefill
+savings that matter for the shared-system-prompt workload without it.
+
 ## Names for latency
 
 | name | what it is | where |
