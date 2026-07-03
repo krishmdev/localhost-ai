@@ -248,6 +248,7 @@ def main() -> None:
                            f"at {b['concurrency']} clients; {slo} met the SLO at that point.")
         out.append("")
     out += mlx_direct_section()
+    out += prefix_section()
     out += ["## NVIDIA CUDA", "", "Not measured. This machine has no NVIDIA GPU. The CUDA "
             "probe, the cu126 image and `docker-compose.gpu.yml` are untested.", ""]
     out += ["## Memory pressure (CPU, Docker)", ""]
@@ -408,6 +409,49 @@ def mlx_qmm_section() -> list[str]:
                 + ". The decode step of a large preset follows the same shape in the table "
                 "above, so on this machine batching those pays off only past that point."]
     out += ["", f"Host: {host_line(q['manifest'])}", ""]
+    return out
+
+
+PREFIX_RUNS = (("smollm2-135m", "SmolLM2-135M on the Apple GPU (MPS, torch runner)"),
+               ("qwen3.5-9b", "Qwen3.5-9B 4-bit on the Apple GPU (MLX runner)"))
+
+
+def prefix_section() -> list[str]:
+    """Prefix caching off vs on, same sweep, every request carrying the same system prompt."""
+    pairs = [(lbl, name, load(f"prefix-{lbl}-off"), load(f"prefix-{lbl}-on"))
+             for lbl, name in PREFIX_RUNS]
+    pairs = [p for p in pairs if p[2] and p[3]]
+    if not pairs:
+        return []
+    out = ["## Prefix caching, shared system prompt", "",
+           "`bench/prefix.sh` runs the same sweep twice, with `LHAI_PREFIX_CACHE` off and on. "
+           "Every request sends `bench/system_prompt.txt` as its system message and one of the "
+           "usual prompts as the user message, so the prompts share a long common prefix. The "
+           "server finds it after the first two requests and stores it once; later rows "
+           "prefill only their own suffix. TTFT here includes the wait in the queue.", ""]
+    for _, name, off, on in pairs:
+        c = on["config"]
+        tr = [p for r in on["runs"] for p in r.get("trace", []) if "prefix_bytes" in p]
+        size = max((p["prefix_bytes"] for p in tr), default=None)
+        hit = max((p.get("prefix_hit_tokens") or 0 for p in tr), default=None)
+        out += [f"### {name}", "",
+                f"Model `{on['model']['id']}`, max_tokens {c['max_tokens']}, "
+                f"{c['duration']:.0f} s per point, modes {c['modes']}."
+                + (f" Stored prefixes held up to {size / 2**20:.1f} MiB; by the end "
+                   f"{hit:,} prompt tokens had been served from them." if size else ""), "",
+                "| controller | clients | TTFT p50 off / on (ms) | TTFT p95 off / on (ms) | "
+                "output tok/s off / on | completed off / on |", "|---|---:|---:|---:|---:|---:|"]
+        key = {(r["mode"], r["concurrency"]): r for r in on["runs"] if not r.get("skipped")}
+        for r0 in off["runs"]:
+            r1 = key.get((r0.get("mode"), r0.get("concurrency")))
+            if r0.get("skipped") or r1 is None:
+                continue
+            out.append(f"| {r0['mode']} | {r0['concurrency']} | "
+                       f"{fmt(r0['ttft_p50_ms'], 0)} / {fmt(r1['ttft_p50_ms'], 0)} | "
+                       f"{fmt(r0['ttft_p95_ms'], 0)} / {fmt(r1['ttft_p95_ms'], 0)} | "
+                       f"{r0['out_tok_per_s']:.0f} / {r1['out_tok_per_s']:.0f} | "
+                       f"{r0['completed']} / {r1['completed']} |")
+        out += ["", f"Host: {host_line(on['manifest'])}", ""]
     return out
 
 
