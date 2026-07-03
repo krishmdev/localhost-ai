@@ -108,3 +108,17 @@ def test_cancel_mid_stream_leaves_the_other_rows_unchanged(runner):
     for i, r in enumerate(reqs):
         if i != 1:
             assert r.generated == alone[i]
+
+
+def test_prefix_cache_gives_the_same_greedy_tokens(runner):
+    from localhost_ai.engine.prefix import PrefixCache
+
+    system = list(range(40, 52))
+    prompts = [system + p for p in PROMPTS]
+    params = [SamplingParams(temperature=0.0, max_tokens=N)] * len(prompts)
+    plain = [run(runner, [p], 1, params[:1])[0][0].generated for p in prompts]
+    cached = MLXModelRunner(runner.model, eos_ids=frozenset(),
+                            prefix_cache=PrefixCache(budget_bytes=1 << 30, min_tokens=8))
+    reqs, _, sched = run(cached, prompts, len(prompts), params, join_after=2)
+    assert [r.generated for r in reqs] == plain
+    assert cached.prefix.hits >= len(prompts) - 1

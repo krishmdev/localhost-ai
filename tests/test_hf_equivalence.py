@@ -130,3 +130,42 @@ def test_crop_after_failure_mid_stack(loaded):
     assert lengths == {state.mask.shape[1]}
     got = r.decode(state, toks)
     torch.testing.assert_close(got, expected, atol=1e-4, rtol=1e-4)
+
+
+SYSTEM = ("You are a careful assistant for a small team. Answer in plain English, keep answers "
+          "short, say when you are unsure, and never invent facts, names, numbers or sources. "
+          "If a question is ambiguous, answer the most likely reading and say so.")
+
+
+def run_system(loaded, prompts, limit, join_after=None):
+    sched = Scheduler(loaded.runner, loaded.tokenizer, FixedController(limit))
+    params = SamplingParams(temperature=0.0, max_tokens=N_TOKENS)
+    reqs = [Request(loaded.encode_chat([{"role": "system", "content": SYSTEM},
+                                        {"role": "user", "content": p}]), params)
+            for p in prompts]
+    late = reqs[join_after:] if join_after else []
+    for r in reqs[: join_after or len(reqs)]:
+        sched.add(r)
+    steps = 0
+    while sched.has_work() or late:
+        sched.step()
+        steps += 1
+        if late and steps == 5:
+            for r in late:
+                sched.add(r)
+            late = []
+    return [r.generated for r in reqs]
+
+
+def test_prefix_cache_gives_the_same_greedy_tokens(loaded):
+    from localhost_ai.engine.prefix import PrefixCache
+
+    alone = [run_system(loaded, [p], limit=1)[0] for p in PROMPTS]
+    loaded.runner.prefix = pc = PrefixCache(budget_bytes=1 << 30, min_tokens=16)
+    try:
+        cached = run_system(loaded, PROMPTS, limit=len(PROMPTS), join_after=2)
+    finally:
+        loaded.runner.prefix = None
+    assert pc.hits >= len(PROMPTS) - 1 and pc.hit_tokens > 16 * (len(PROMPTS) - 1)
+    for p, a, b in zip(PROMPTS, alone, cached, strict=True):
+        assert a == b, f"{p!r}: diverged at token {first_mismatch(a, b)}"
