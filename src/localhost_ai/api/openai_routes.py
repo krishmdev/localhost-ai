@@ -50,7 +50,7 @@ def sampling_params(body: ChatCompletionRequest, prompt_len: int, svc: Service) 
 
 
 def submit(svc: Service, messages: list[dict[str, str]], params_for,
-           response_format: ResponseFormat | None = None) -> Handle:
+           response_format: ResponseFormat | None = None, adapter: str | None = None) -> Handle:
     """Shared by REST and WebSocket. Raises QueueFull / HTTPException."""
     if svc.swapping:
         raise HTTPException(503, "model is being replaced; retry shortly")
@@ -58,7 +58,30 @@ def submit(svc: Service, messages: list[dict[str, str]], params_for,
         raise HTTPException(503, "no model is loaded")
     ids = svc.parts.encode_chat(messages)
     params = params_for(len(ids))
-    return svc.engine.submit(ids, params, constraint_for(svc, response_format))
+    return svc.engine.submit(ids, params, constraint_for(svc, response_format), adapter)
+
+
+def pick_adapter(svc: Service, body: ChatCompletionRequest) -> str | None:
+    """`model` may name the base model (or its Hub repo) or a loaded LoRA adapter; `adapter`
+    names an adapter explicitly. Returns the adapter to run, None for the base model. Raises
+    HTTPException 404 for names that aren't loaded, 400 if the two fields disagree."""
+    if svc.parts is None:
+        return None
+    names = svc.parts.adapters
+    base = (svc.model_name, svc.parts.info.get("repo"))
+    by_model = body.model if body.model in names else None
+    if body.model and body.model not in base and by_model is None:
+        raise HTTPException(404, f"model {body.model!r} is not loaded (serving "
+                            f"{', '.join([svc.model_name, *names])})")
+    if body.adapter is None:
+        return by_model
+    if body.adapter not in names:
+        raise HTTPException(404, f"adapter {body.adapter!r} is not loaded"
+                            + (f" (loaded: {', '.join(names)})" if names else ""))
+    if by_model is not None and by_model != body.adapter:
+        raise HTTPException(400, f"model names adapter {by_model!r} but adapter is "
+                            f"{body.adapter!r}")
+    return body.adapter
 
 
 def constraint_for(svc: Service, fmt: ResponseFormat | None):
@@ -90,20 +113,23 @@ async def list_models(request: Request) -> ModelList:
     svc: Service = request.app.state.svc
     if svc.parts is None:
         return ModelList(data=[])
-    return ModelList(data=[ModelCard(id=svc.model_name, root=svc.parts.info.get("repo"))])
+    base = ModelCard(id=svc.model_name, root=svc.parts.info.get("repo"))
+    return ModelList(data=[base, *(ModelCard(id=a, parent=svc.model_name)
+                                   for a in svc.parts.adapters)])
 
 
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatCompletionRequest, request: Request):
     svc: Service = request.app.state.svc
-    repo = svc.parts.info.get("repo") if svc.parts is not None else None
-    if svc.parts is not None and body.model and body.model not in (svc.model_name, repo):
-        return error(404, f"model {body.model!r} is not loaded (serving {svc.model_name})",
-                     "invalid_request_error", "model_not_found")
+    try:
+        adapter = pick_adapter(svc, body)
+    except HTTPException as exc:
+        return error(exc.status_code, exc.detail, "invalid_request_error",
+                     "model_not_found" if exc.status_code == 404 else None)
     messages = [m.model_dump() for m in body.messages]
     try:
         handle = submit(svc, messages, lambda n: sampling_params(body, n, svc),
-                        body.response_format)
+                        body.response_format, adapter)
     except QueueFull as exc:
         svc.metrics.rejected()
         return error(429, str(exc), "rate_limit_error", "queue_full",
@@ -113,10 +139,11 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
+    served = adapter or svc.model_name
     if body.stream:
         include_usage = bool(body.stream_options and body.stream_options.include_usage)
         return StreamingResponse(
-            stream(handle, cid, created, svc.model_name, include_usage),
+            stream(handle, cid, created, served, include_usage),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -136,7 +163,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 return error(500, ev.message, "server_error", ev.code)
             elif isinstance(ev, DoneEvent):
                 return ChatCompletion(
-                    id=cid, created=created, model=svc.model_name,
+                    id=cid, created=created, model=served,
                     choices=[Choice(message=AssistantMessage(content="".join(parts)),
                                     finish_reason=ev.finish_reason)],
                     usage=usage(ev), timings=timings(ev),

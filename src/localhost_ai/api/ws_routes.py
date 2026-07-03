@@ -31,7 +31,7 @@ from ..engine.engine import Handle
 from ..engine.request import DoneEvent, ErrorEvent, TokenEvent
 from ..engine.scheduler import QueueFull
 from ..service import Service
-from .openai_routes import sampling_params, submit, timings, usage
+from .openai_routes import pick_adapter, sampling_params, submit, timings, usage
 from .schemas import ChatCompletionRequest
 
 router = APIRouter()
@@ -124,7 +124,7 @@ async def ws_generate(ws: WebSocket) -> None:
                                                 if k not in ("type", "id")})
                 handle = submit(svc, [m.model_dump() for m in body.messages],
                                 lambda n, b=body: sampling_params(b, n, svc),
-                                body.response_format)
+                                body.response_format, pick_adapter(svc, body))
             except ValidationError as exc:
                 await conn.send({"type": "error", "id": rid, "code": "invalid_request",
                                  "message": exc.errors()[0]["msg"]})

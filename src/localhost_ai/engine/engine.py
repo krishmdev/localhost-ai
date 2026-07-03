@@ -99,7 +99,7 @@ class AsyncEngine:
     # --- requests ----------------------------------------------------------------------------
 
     def submit(self, prompt_ids: list[int], params: SamplingParams,
-               constraint: object | None = None) -> Handle:
+               constraint: object | None = None, adapter: str | None = None) -> Handle:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
 
@@ -112,7 +112,7 @@ class AsyncEngine:
                 req.cancel()
 
         req = Request(prompt_ids=list(prompt_ids), params=params, on_event=push,
-                      constraint=constraint)
+                      constraint=constraint, adapter=adapter)
         pos = self.scheduler.add(req)  # raises QueueFull
         self._wake.set()
         return Handle(req, pos, queue, self)

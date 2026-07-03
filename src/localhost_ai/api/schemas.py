@@ -56,6 +56,8 @@ class ChatCompletionRequest(BaseModel):
     stream_options: StreamOptions | None = None
     user: str | None = None
     response_format: ResponseFormat | None = None
+    # extension: a loaded LoRA adapter by name (the same as sending its name as `model`)
+    adapter: str | None = None
 
 
 class Usage(BaseModel):
@@ -120,6 +122,7 @@ class ModelCard(BaseModel):
     created: int = 0
     owned_by: str = "localhost-ai"
     root: str | None = None
+    parent: str | None = None  # for a LoRA adapter, the base model it runs on
 
 
 class ModelList(BaseModel):
