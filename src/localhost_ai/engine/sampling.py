@@ -43,6 +43,13 @@ def sample(logits: torch.Tensor, params: list[SamplingParams],
     return out
 
 
+# Candidates kept per sampled row before top-k/top-p. Sorting a full 150k vocabulary on the
+# CPU took 13 ms per row per step (Qwen2.5-3B), about as long as the model's decode step, so the
+# nucleus is looked for among the top CANDIDATES logits first. Rows whose nucleus doesn't fit
+# there (a very flat distribution) fall back to the full sort, so the result is exact either way.
+CANDIDATES = 256
+
+
 def _pick(logits: torch.Tensor, params: list[SamplingParams],
           generators: list[torch.Generator]) -> list[int]:
     greedy = logits.argmax(dim=-1)
@@ -54,21 +61,47 @@ def _pick(logits: torch.Tensor, params: list[SamplingParams],
     sub = logits[rows]
     temps = torch.tensor([params[i].temperature for i in rows]).unsqueeze(1)
     sub = sub / temps
-    sorted_logits, sorted_idx = sub.sort(dim=-1, descending=True)
-    vocab = sub.shape[-1]
-    ranks = torch.arange(vocab).unsqueeze(0)
-
-    top_k = torch.tensor([params[i].top_k if params[i].top_k > 0 else vocab for i in rows])
-    mask = ranks >= top_k.unsqueeze(1)
-
-    probs = sorted_logits.masked_fill(mask, float("-inf")).softmax(dim=-1)
-    top_p = torch.tensor([params[i].top_p for i in rows]).unsqueeze(1)
-    # Keep the smallest prefix whose mass reaches top_p (the first token always survives).
-    cum_before = probs.cumsum(dim=-1) - probs
-    mask |= cum_before >= top_p
-
-    probs = sorted_logits.masked_fill(mask, float("-inf")).softmax(dim=-1)
-    for j, i in enumerate(rows):
-        pick = torch.multinomial(probs[j], 1, generator=generators[i])
-        out[i] = int(sorted_idx[j, pick])
+    for j, (probs, ids) in enumerate(nucleus(sub, [params[i] for i in rows])):
+        pick = int(torch.multinomial(probs, 1, generator=generators[rows[j]]))
+        out[rows[j]] = pick if ids is None else int(ids[pick])
     return out
+
+
+def nucleus(scaled: torch.Tensor, params: list[SamplingParams],
+            candidates: int = CANDIDATES) -> list[tuple[torch.Tensor, torch.Tensor | None]]:
+    """Per row, the probabilities left after top-k and top-p (renormalized, 0 where cut) and
+    the token ids they belong to; ids None means the probabilities are over the whole
+    vocabulary in id order. `scaled` is already divided by the temperature."""
+    vocab = scaled.shape[-1]
+    k = min(vocab, candidates)
+    top_k = torch.tensor([p.top_k if 0 < p.top_k < vocab else vocab for p in params])
+    top_p = torch.tensor([p.top_p for p in params])
+    vals, idx = scaled.topk(k, dim=-1)  # sorted, descending
+    kmask = torch.arange(k).unsqueeze(0) >= top_k.clamp(max=k).unsqueeze(1)
+    cut = top_k <= k  # top-k ends inside the candidates: renormalize over the top-k
+    within = vals.masked_fill(kmask, float("-inf")).softmax(dim=-1)
+    whole = (vals - scaled.logsumexp(dim=-1, keepdim=True)).exp()  # share of the full vocab
+    probs = torch.where(cut.unsqueeze(1), within, whole)
+    # Keep the smallest prefix whose mass reaches top_p (the first token always survives).
+    mask = kmask | ((probs.cumsum(dim=-1) - probs) >= top_p.unsqueeze(1))
+    final = vals.masked_fill(mask, float("-inf")).softmax(dim=-1)
+    # Without top-k, the nucleus ends inside the candidates if they hold top_p of the mass.
+    fits = cut | ((top_p < 1.0) & (whole.sum(dim=-1) >= top_p))
+    out: list[tuple[torch.Tensor, torch.Tensor | None]] = []
+    for j in range(len(params)):
+        if fits[j]:
+            out.append((final[j], idx[j]))
+        elif top_k[j] == vocab and top_p[j] >= 1.0:
+            out.append((scaled[j].softmax(dim=-1), None))  # plain temperature sampling
+        else:
+            out.append(_full_sort(scaled[j], int(top_k[j]), float(top_p[j])))
+    return out
+
+
+def _full_sort(row: torch.Tensor, top_k: int, top_p: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """Top-k then top-p over the whole sorted vocabulary, for rows the candidates can't cover."""
+    sorted_logits, sorted_idx = row.sort(descending=True)
+    mask = torch.arange(row.shape[-1]) >= top_k
+    probs = sorted_logits.masked_fill(mask, float("-inf")).softmax(dim=-1)
+    mask |= (probs.cumsum(dim=-1) - probs) >= top_p
+    return sorted_logits.masked_fill(mask, float("-inf")).softmax(dim=-1), sorted_idx
