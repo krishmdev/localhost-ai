@@ -253,6 +253,35 @@ time a model sees a constrained request. `tests/test_constrain_model.py` checks 
 with the tokenizer of every preset (SmolLM2, Qwen2.5, Llama 3.2, Gemma 4, Qwen3.5): real JSON
 tokenizations are accepted, and ordinary text can't start a JSON answer.
 
+## Multi-LoRA (`engine/lora.py`)
+
+`LHAI_ADAPTERS` loads mlx-lm LoRA adapters onto the startup MLX model. `install` wraps every
+linear layer that any adapter touches in a `MultiLoRALinear`. The base layer stays as it is,
+still 4-bit, and the adapters' factors are stacked with an all-zero slot 0 for "no adapter".
+Adapters of different ranks are zero-padded to the widest, and an adapter that doesn't touch
+a layer gets the zero slot there. A layer computes `base(x) + scale[i] * (x @ A[i]) @ B[i]` per
+row, with three paths:
+
+- no row uses an adapter: the base layer only;
+- every row uses the same adapter: the same two unfused matmuls as mlx-lm's `LoRALinear`;
+- mixed rows: two `mx.gather_mm` calls pick each row's factors inside one batched matmul.
+
+`LoRAMLXRunner` extends `MLXModelRunner`. The batch state carries one adapter slot per row
+through merge and select, like the row lengths, and the runner sets the slots on the wrapped
+layers before each forward pass. The scheduler passes the requests' adapter names to `prefill`
+only when one of them has an adapter, so the torch and fake runners never see the argument.
+Adapter and base rows therefore share batches, and the controller sees one decode step as
+before.
+
+Stored prompt prefixes hold base-model KV, so a prefill with any adapter row skips the prefix
+cache, while base-only prefills use it. A prefix cache keyed by adapter would let adapter rows
+share prefixes as well. That isn't done.
+
+The tests in `tests/test_lora.py` build random adapters for a tiny Llama. Each adapter row must
+match mlx-lm's own `load_adapters` model, mixed batches must match each row alone, and base
+rows must be bit-identical to the model without adapters. `tests/test_lora_model.py` does the
+same with EduAI's adapters on Llama-3.2-3B, token for token against mlx-lm's `stream_generate`.
+
 ## Names for latency
 
 | name | what it is | where |

@@ -146,6 +146,30 @@ Things to know:
 - A schema llguidance can't compile gets a 400. With `strict: true`, unsupported keywords are
   errors; without it they are ignored.
 
+### LoRA adapters
+
+On MLX presets, one base model can serve several LoRA adapters at once. Each request picks one
+by sending its name as `model` (or in an `adapter` field), and a batch can mix rows on
+different adapters with rows on the base model in the same forward pass. Adapters are mlx-lm
+LoRA checkpoints (a directory with `adapter_config.json` and `adapters.safetensors`, or one
+checkpoint file inside such a directory):
+
+```bash
+LHAI_MODEL=llama-3.2-3b-mlx4 \
+LHAI_ADAPTERS="eduai=../eduai/adapters/llama32-3b-eduai,eduai-300=../eduai/adapters/llama32-3b-eduai/0000300_adapters.safetensors" \
+  uv run lhai serve
+curl localhost:8000/v1/models        # llama-3.2-3b-mlx4, plus eduai and eduai-300 with parent set
+```
+
+```python
+client.chat.completions.create(model="eduai", messages=[...])              # the adapter
+client.chat.completions.create(model="llama-3.2-3b-mlx4", messages=[...])  # the base model
+```
+
+The adapters above are the ones EduAI trains for Llama-3.2-3B-Instruct 4-bit: the final
+checkpoint and the one from halfway through the same run. Requests without an adapter run the
+base layers only and give the same tokens as a server with no adapters loaded.
+
 ## How it works
 
 The scheduler (`engine/scheduler.py`) batches at each iteration, following TGI v1. It admits
@@ -248,6 +272,7 @@ Environment variables, prefix `LHAI_` (see `src/localhost_ai/config.py`):
   of a prompt prefix that recent requests share, such as a long system prompt.
 - `ADMIN_TOKEN`, `ALLOWED_HOSTS`.
 - `MEM_LIMIT_BYTES`: pretend-budget for native runs.
+- `ADAPTERS`: LoRA adapters for the startup model (MLX presets), `name=path,name2=path2`.
 
 Models are pinned in `models.yaml` (repo and commit) and hashed in `models.lock`.
 `lhai models pull --all` also fetches SmolLM2-360M, Qwen2.5-0.5B and the three MLX presets
@@ -289,9 +314,14 @@ caches work and what differs from the torch path.
   - With a shared system prompt and the prefix cache on, the batched greedy tokens match the
     uncached one-at-a-time run.
 - `make test` also covers `response_format` (a fake model with a small JSON vocabulary: every
-  output that stops parses and matches its schema, including after preemption).
+  output that stops parses and matches its schema, including after preemption) and multi-LoRA
+  on a tiny random Llama (each adapter row matches mlx-lm's own LoRA layer, mixed batches match
+  each row alone, base rows are bit-identical to a model without adapters).
 - On the real models (`make test-model`, `make test-mlx`): batched JSON-schema generation on
-  SmolLM2-135M and Qwen2.5-0.5B.
+  SmolLM2-135M and Qwen2.5-0.5B, and EduAI's two Llama-3.2-3B adapters in one mixed batch with
+  base rows, each row compared token for token with mlx-lm's `stream_generate` with that
+  adapter loaded (`tests/test_lora_model.py`; set `LHAI_EDUAI_ADAPTER` if the adapters aren't
+  in `../eduai/adapters/llama32-3b-eduai`).
 - CI runs lint and unit tests. It also runs the Docker image with `--network none` against the
   pinned weights (see `.github/workflows/ci.yml`). CI does not download models for the unit job.
 
@@ -316,6 +346,9 @@ caches work and what differs from the torch path.
   allocation steps, recurrent state), and the KV in use is read off the cache arrays. After
   rows leave, the trimmed arrays are views of the old buffers, so the figure can be a little low
   until the next reallocation.
+- LoRA adapters are fixed at startup (`LHAI_ADAPTERS`) and apply to MLX presets only. There's
+  no endpoint to add one at runtime, and a hot-swapped model loads without them. Rows on an
+  adapter skip the prefix cache, which holds base-model KV.
 - Constrained decoding computes each row's token mask on the CPU, one row at a time, in the
   compute thread.
 - Docker on a Mac is CPU-only (no Metal in containers).
@@ -346,7 +379,7 @@ caches work and what differs from the torch path.
 ## Layout
 
 ```
-src/localhost_ai/   engine/ (scheduler, controller, kv, runner, sampling, constrain, detok),
+src/localhost_ai/   engine/ (scheduler, controller, kv, runner, sampling, constrain, lora, detok),
                     api/, models/, memory.py, metrics.py, cli.py
 bench/              loadgen.py, baseline.py, mempressure.py, report.py, results/, figures/,
                     RESULTS.md
