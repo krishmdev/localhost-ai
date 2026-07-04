@@ -89,9 +89,42 @@ def generate(loaded, eos):
     return shaped, plain, alone
 
 
+# Largest logit gap accepted where a batched greedy token differs from the solo argmax on 4-bit
+# MLX. The quantized matmul kernels differ with the number of rows, so near-tied logits can
+# swap between a batch and a single row; a real batching bug moves logits far more than this.
+NEAR_TIE = 0.25
+
+
+def solo_gaps(loaded, prompt, tokens):
+    """Teacher-force `tokens` through the model alone; per step, how far each token's logit is
+    below that step's maximum (0 where it is the argmax)."""
+    state, logits = loaded.runner.prefill([prompt])
+    gaps = []
+    for t in tokens:
+        row = logits[0]
+        gaps.append(float(row.max() - row[t]))
+        if t in loaded.runner.eos_ids:
+            break
+        logits = loaded.runner.decode(state, [t])
+    return gaps
+
+
 def check(loaded, shaped, plain, alone):
-    horizon = 24 if getattr(loaded, "model_id", "").endswith("-mlx4") else 64
-    assert [q.generated[:horizon] for q in plain] == [a[:horizon] for a in alone]
+    """Unconstrained rows batched with constrained ones must match running alone: exactly on
+    torch (fp32), and on 4-bit MLX up to near-ties, checked by teacher forcing the batched
+    tokens through the solo model (a divergence then has to be a near-tie at that step)."""
+    if loaded.spec.backend != "mlx":
+        assert [q.generated for q in plain] == alone
+    else:
+        for q, a in zip(plain, alone, strict=True):
+            if q.generated == a:
+                continue
+            gaps = solo_gaps(loaded, q.prompt_ids, q.generated)
+            worst = max(gaps)
+            first = next(i for i, g in enumerate(gaps) if g > 0)
+            print(f"batched row left the solo argmax first at token {first}; "
+                  f"largest solo logit gap {worst:.4f}")
+            assert worst <= NEAR_TIE, (first, worst)
     stopped = 0
     for r in shaped:
         body = loaded.tokenizer.decode(r.generated, skip_special_tokens=True)
