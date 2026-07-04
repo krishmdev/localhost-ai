@@ -1,5 +1,5 @@
 """CPU time of one sampling step, the old full-vocabulary sort against the candidate-set sampler
-in engine/sampling.py, on real next-token logits.
+in engine/sampling.py, on real next-token logits, and a same-seed token check between the two.
 
 Logits are collected from an MLX preset decoding the benchmark prompts at temperature 0.7, then
 both samplers run over the same logits for batches of 1 to 32 rows, with the loadgen's settings
@@ -70,8 +70,18 @@ def collect(preset: str, steps: int) -> torch.Tensor:
     return torch.stack(rows)
 
 
-def timed(fn, logits: torch.Tensor, batch: int, reps: int) -> float:
-    params = [SamplingParams(temperature=0.7, top_p=0.95)] * batch
+SETTINGS = {"t0.7-p0.95": dict(temperature=0.7, top_p=0.95),  # the loadgen's
+            "t1.0-p0.9": dict(temperature=1.0, top_p=0.9),
+            "t0.8-p0.95-k40": dict(temperature=0.8, top_p=0.95, top_k=40),
+            "t1.0-p1.0": dict(temperature=1.0, top_p=1.0)}  # API default: always sorts
+
+
+def params_for(batch: int, seeded: bool, setting: dict, base: int = 0) -> list[SamplingParams]:
+    return [SamplingParams(seed=base + i if seeded else None, **setting) for i in range(batch)]
+
+
+def timed(fn, logits: torch.Tensor, batch: int, reps: int, seeded: bool) -> float:
+    params = params_for(batch, seeded, SETTINGS["t0.7-p0.95"])
     gens = [sampling.make_generator(i) for i in range(batch)]
     n = logits.shape[0] // batch
     fn(logits[:batch], params, gens)  # warm-up
@@ -82,28 +92,40 @@ def timed(fn, logits: torch.Tensor, batch: int, reps: int) -> float:
     return (time.perf_counter() - t) / reps
 
 
-def same_seed_check(logits: torch.Tensor, batch: int, rows: int = 128) -> dict:
-    """Compare actual token picks while each row's generator advances across several steps."""
-    mismatches = 0
+def same_seed_check(logits: torch.Tensor, batch: int, setting: dict) -> dict:
+    """Seeded rows: the old full sort and the current sampler, each with its own copy of every
+    row's generator, over consecutive real logit rows (a generator advances across steps, so
+    any difference in how a draw consumes it shows up in later tokens). Also counts the rows
+    the current sampler had to sort in full."""
+    mismatches, compared, sorted_rows = 0, 0, 0
     first = None
-    compared = 0
-    for seed in (0, 7, 42):
-        old_gen = [sampling.make_generator(seed + i) for i in range(batch)]
-        new_gen = [sampling.make_generator(seed + i) for i in range(batch)]
-        for start in range(0, min(rows, len(logits)), batch):
-            chunk = logits[start:start + batch]
-            params = [SamplingParams(temperature=0.7, top_p=0.95)] * len(chunk)
-            old = full_sort(chunk, params, old_gen[:len(chunk)])
-            new = sampling.sample(chunk, params, new_gen[:len(chunk)])
-            for i, (a, b) in enumerate(zip(old, new, strict=True)):
-                if a != b:
-                    mismatches += 1
-                    if first is None:
-                        first = {"seed": seed, "logit_row": start + i, "batch_row": i,
-                                 "full_sort": a, "candidates": b}
-                compared += 1
-    return {"compared_tokens": compared, "mismatches": mismatches,
-            "first_mismatch": first, "logit_rows_per_seed": min(rows, len(logits))}
+    orig = sampling._full_sort
+
+    def counting(rows, k, p):
+        nonlocal sorted_rows
+        sorted_rows += len(rows)
+        return orig(rows, k, p)
+
+    sampling._full_sort = counting
+    try:
+        for seed in (0, 7, 42):
+            old_gen = [sampling.make_generator(seed + i) for i in range(batch)]
+            new_gen = [sampling.make_generator(seed + i) for i in range(batch)]
+            for start in range(0, len(logits) - batch + 1, batch):
+                chunk = logits[start:start + batch]
+                params = params_for(batch, True, setting, seed)
+                old = full_sort(chunk, params, old_gen)
+                new = sampling.sample(chunk, params, new_gen)
+                for i, (a, b) in enumerate(zip(old, new, strict=True)):
+                    compared += 1
+                    if a != b:
+                        mismatches += 1
+                        first = first or {"seed": seed, "logit_row": start + i,
+                                          "full_sort": a, "candidates": b}
+    finally:
+        sampling._full_sort = orig
+    return {"compared_tokens": compared, "mismatches": mismatches, "first_mismatch": first,
+            "full_sorted_rows": sorted_rows}
 
 
 def main() -> None:
@@ -112,37 +134,37 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=32, help="decode steps per prompt")
     ap.add_argument("--batches", default="1,8,32")
     ap.add_argument("--reps", type=int, default=40)
-    ap.add_argument("--equiv-rows", type=int, default=128)
     ap.add_argument("--manifest", default=None)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     logits = collect(args.preset, args.steps)
-    params = [SamplingParams(temperature=0.7, top_p=0.95)] * logits.shape[0]
-    probs = sampling.nucleus(logits / 0.7, params)
-    fallbacks = sum(ids is not None and ids.numel() == logits.shape[1] for _, ids in probs)
-    kept = [int((p > 0).sum()) for p, _ in probs]
-    rows = []
+    kept = [int((p > 0).sum()) for p, _ in
+            sampling.nucleus(logits / 0.7, params_for(len(logits), False, SETTINGS["t0.7-p0.95"]))]
     batches = [int(x) for x in args.batches.split(",")]
-    equivalence = {str(b): same_seed_check(logits, b, args.equiv_rows) for b in batches}
-    mismatches = sum(v["mismatches"] for v in equivalence.values())
-    if mismatches:
-        Path(args.out).write_text(json.dumps({"preset": args.preset,
-            "same_seed_check": equivalence, "runs": []}, indent=1) + "\n")
-        raise SystemExit(f"{mismatches} same-seed token mismatches; saved check to {args.out}")
+    equivalence = {name: {str(b): same_seed_check(logits, b, st) for b in batches}
+                   for name, st in SETTINGS.items()}
+    for name, per in equivalence.items():
+        print(name, per, file=sys.stderr)
+    mismatches = sum(v["mismatches"] for per in equivalence.values() for v in per.values())
+    rows = []
     for b in batches:
-        old = timed(full_sort, logits, b, args.reps)
-        new = timed(sampling.sample, logits, b, args.reps)
+        old = timed(full_sort, logits, b, args.reps, True)
+        seeded = timed(sampling.sample, logits, b, args.reps, True)
+        unseeded = timed(sampling.sample, logits, b, args.reps, False)
         rows.append({"batch": b, "full_sort_ms": round(old * 1e3, 3),
-                     "candidates_ms": round(new * 1e3, 3), "speedup": round(old / new, 1)})
+                     "seeded_ms": round(seeded * 1e3, 3),
+                     "unseeded_ms": round(unseeded * 1e3, 3)})
         print(rows[-1], file=sys.stderr)
     out = {"preset": args.preset, "vocab": logits.shape[1], "logit_rows": logits.shape[0],
-           "candidates": sampling.CANDIDATES, "temperature": 0.7, "top_p": 0.95,
-           "fallback_rows": fallbacks, "nucleus_size_p50": sorted(kept)[len(kept) // 2],
-           "nucleus_size_max": max(kept), "torch_threads": torch.get_num_threads(),
+           "candidates": sampling.CANDIDATES, "timing_setting": SETTINGS["t0.7-p0.95"],
+           "nucleus_size_p50": sorted(kept)[len(kept) // 2], "nucleus_size_max": max(kept),
+           "torch_threads": torch.get_num_threads(), "same_seed_mismatches": mismatches,
            "same_seed_check": equivalence, "runs": rows,
            "manifest": manifest(args.manifest, {"target": "sampler"})}
     Path(args.out).write_text(json.dumps(out, indent=1) + "\n")
     print(f"wrote {args.out}", file=sys.stderr)
+    if mismatches:
+        raise SystemExit(f"{mismatches} same-seed token mismatches")
 
 
 if __name__ == "__main__":
