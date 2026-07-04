@@ -50,7 +50,7 @@ def sampling_params(body: ChatCompletionRequest, prompt_len: int, svc: Service) 
 
 
 def submit(svc: Service, messages: list[dict[str, str]], params_for,
-           response_format: ResponseFormat | None = None, adapter: str | None = None) -> Handle:
+           constraint: object | None = None, adapter: str | None = None) -> Handle:
     """Shared by REST and WebSocket. Raises QueueFull / HTTPException."""
     if svc.swapping:
         raise HTTPException(503, "model is being replaced; retry shortly")
@@ -58,7 +58,7 @@ def submit(svc: Service, messages: list[dict[str, str]], params_for,
         raise HTTPException(503, "no model is loaded")
     ids = svc.parts.encode_chat(messages)
     params = params_for(len(ids))
-    return svc.engine.submit(ids, params, constraint_for(svc, response_format), adapter)
+    return svc.engine.submit(ids, params, constraint, adapter)
 
 
 def pick_adapter(svc: Service, body: ChatCompletionRequest) -> str | None:
@@ -82,6 +82,15 @@ def pick_adapter(svc: Service, body: ChatCompletionRequest) -> str | None:
         raise HTTPException(400, f"model names adapter {by_model!r} but adapter is "
                             f"{body.adapter!r}")
     return body.adapter
+
+
+async def build_constraint(svc: Service, fmt: ResponseFormat | None):
+    """The token-level constraint for a response_format, None for plain text. Built on a worker
+    thread: the first one on a model also builds llguidance's view of the vocabulary, which
+    takes a second or two and would otherwise stall every stream on the event loop."""
+    if fmt is None or fmt.type == "text" or svc.parts is None:
+        return None
+    return await asyncio.to_thread(constraint_for, svc, fmt)
 
 
 def constraint_for(svc: Service, fmt: ResponseFormat | None):
@@ -128,8 +137,9 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                      "model_not_found" if exc.status_code == 404 else None)
     messages = [m.model_dump() for m in body.messages]
     try:
+        constraint = await build_constraint(svc, body.response_format)
         handle = submit(svc, messages, lambda n: sampling_params(body, n, svc),
-                        body.response_format, adapter)
+                        constraint, adapter)
     except QueueFull as exc:
         svc.metrics.rejected()
         return error(429, str(exc), "rate_limit_error", "queue_full",

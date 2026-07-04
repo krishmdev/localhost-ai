@@ -198,12 +198,7 @@ def test_bad_schemas_raise_grammar_error():
 
 # --- the OpenAI API ---------------------------------------------------------------------------
 
-@pytest.fixture
-async def json_sdk():
-    import httpx
-    from openai import AsyncOpenAI
-
-    from localhost_ai.api.app import create_app
+def json_service():
     from localhost_ai.config import Settings
     from localhost_ai.memory import FakeProbe
     from localhost_ai.metrics import EngineMetrics
@@ -214,9 +209,19 @@ async def json_sdk():
                        default_max_tokens=96, grammars=GRAMMARS,
                        info={"model": "fake-json", "repo": "test/fake-json", "device": "cpu",
                              "dtype": "fp32", "quant": "none"})
-    svc = Service(settings=Settings(control_interval_s=0.2, max_context=256), parts=parts,
-                  probe=FakeProbe(limit=1 << 30, used=1 << 28), metrics=EngineMetrics(),
-                  model_names=["fake-json"])
+    return Service(settings=Settings(control_interval_s=0.2, max_context=256), parts=parts,
+                   probe=FakeProbe(limit=1 << 30, used=1 << 28), metrics=EngineMetrics(),
+                   model_names=["fake-json"])
+
+
+@pytest.fixture
+async def json_sdk():
+    import httpx
+    from openai import AsyncOpenAI
+
+    from localhost_ai.api.app import create_app
+
+    svc = json_service()
     app = create_app(svc)
     svc.start()
     http = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost")
@@ -275,3 +280,26 @@ def test_models_without_grammar_support_get_a_400():
         r = c.post("/v1/chat/completions", json={"messages": MSG, "max_tokens": 2,
                                                  "response_format": {"type": "text"}})
         assert r.status_code == 200
+
+
+def test_websocket_generate_with_response_format():
+    from fastapi.testclient import TestClient
+
+    from localhost_ai.api.app import create_app
+
+    with TestClient(create_app(json_service())) as c, c.websocket_connect("/v1/ws/generate") as ws:
+        ws.send_json({"type": "generate", "id": "a", "messages": MSG, "seed": 1,
+                      "temperature": 1.0, "response_format": {"type": "json_object"}})
+        ws.send_json({"type": "generate", "id": "b", "messages": MSG, "response_format":
+                      {"type": "json_schema", "json_schema": {"schema": {"type": "nope"}}}})
+        text, done, errors = "", None, []
+        while done is None:
+            m = ws.receive_json()
+            if m["type"] == "token":
+                text += m["text"]
+            elif m["type"] == "error":
+                errors.append(m)
+            elif m["type"] == "done":
+                done = m
+    assert done["finish_reason"] == "stop" and isinstance(json.loads(text), dict)
+    assert errors[0]["id"] == "b" and errors[0]["code"] == "400"
