@@ -68,3 +68,28 @@ def test_nucleus_matches_the_full_sort(scale):
     for row, ((k, p), (probs, ids)) in enumerate(zip(grid, got, strict=True)):
         want = reference_probs(logits[row], k, p)
         assert torch.allclose(by_id(probs, ids, vocab), want, atol=1e-6), (scale, k, p)
+
+
+@pytest.mark.parametrize("top_k,top_p", [(0, 1.0), (0, 0.9), (5, 1.0), (5, 0.9),
+                                          (300, 0.95)])
+@pytest.mark.parametrize("ties", [False, True])
+@pytest.mark.parametrize("vocab,scale", [(300, 2.0), (1000, 3.0)])
+def test_nucleus_preserves_full_sort_seeded_tokens(top_k, top_p, ties, vocab, scale):
+    g = torch.Generator().manual_seed(481)
+    logits = torch.randn(12, vocab, generator=g) * scale
+    if ties:
+        logits = logits.round()
+    params = [SamplingParams(temperature=0.8, top_k=top_k, top_p=top_p)] * len(logits)
+    for seed in (0, 1, 7, 42):
+        got = sample(logits, params, [make_generator(seed + i) for i in range(len(logits))])
+        want = []
+        for i, row in enumerate(logits):
+            values, ids = (row / params[i].temperature).sort(descending=True)
+            rank = torch.arange(len(values))
+            mask = rank >= (top_k if top_k else len(values))
+            probs = values.masked_fill(mask, float("-inf")).softmax(-1)
+            mask |= (probs.cumsum(-1) - probs) >= top_p
+            probs = values.masked_fill(mask, float("-inf")).softmax(-1)
+            pick = torch.multinomial(probs, 1, generator=make_generator(seed + i))
+            want.append(int(ids[pick]))
+        assert got == want, (top_k, top_p, ties, seed)

@@ -62,7 +62,16 @@ def _pick(logits: torch.Tensor, params: list[SamplingParams],
     temps = torch.tensor([params[i].temperature for i in rows]).unsqueeze(1)
     sub = sub / temps
     for j, (probs, ids) in enumerate(nucleus(sub, [params[i] for i in rows])):
-        pick = int(torch.multinomial(probs, 1, generator=generators[rows[j]]))
+        # torch.multinomial's seeded draw depends on vector length, even when the extra
+        # probabilities are all zero. Keep the original full-vocabulary length and sorted
+        # rank positions while avoiding a full sort of the logits on the candidate path.
+        if ids is not None and probs.numel() < sub.shape[-1]:
+            full = torch.zeros(sub.shape[-1], dtype=probs.dtype)
+            full[:probs.numel()] = probs
+            draw = full
+        else:
+            draw = probs
+        pick = int(torch.multinomial(draw, 1, generator=generators[rows[j]]))
         out[rows[j]] = pick if ids is None else int(ids[pick])
     return out
 
@@ -76,7 +85,11 @@ def nucleus(scaled: torch.Tensor, params: list[SamplingParams],
     k = min(vocab, candidates)
     top_k = torch.tensor([p.top_k if 0 < p.top_k < vocab else vocab for p in params])
     top_p = torch.tensor([p.top_p for p in params])
-    vals, idx = scaled.topk(k, dim=-1)  # sorted, descending
+    # Ask for one extra value so a tie at the candidate boundary is visible. torch.topk and
+    # torch.sort can order equal logits differently, which changes a seeded multinomial pick.
+    ranked, ranked_idx = scaled.topk(min(vocab, k + 1), dim=-1)
+    vals, idx = ranked[:, :k], ranked_idx[:, :k]
+    tied = (ranked[:, 1:] == ranked[:, :-1]).any(dim=-1)
     kmask = torch.arange(k).unsqueeze(0) >= top_k.clamp(max=k).unsqueeze(1)
     cut = top_k <= k  # top-k ends inside the candidates: renormalize over the top-k
     within = vals.masked_fill(kmask, float("-inf")).softmax(dim=-1)
@@ -89,10 +102,12 @@ def nucleus(scaled: torch.Tensor, params: list[SamplingParams],
     fits = cut | ((top_p < 1.0) & (whole.sum(dim=-1) >= top_p))
     out: list[tuple[torch.Tensor, torch.Tensor | None]] = []
     for j in range(len(params)):
-        if fits[j]:
+        if tied[j] or (top_k[j] == vocab and top_p[j] >= 1.0):
+            # Plain temperature sampling and ties need the original full-sort order to
+            # preserve the exact token sequence for an existing seed.
+            out.append(_full_sort(scaled[j], int(top_k[j]), float(top_p[j])))
+        elif fits[j]:
             out.append((final[j], idx[j]))
-        elif top_k[j] == vocab and top_p[j] >= 1.0:
-            out.append((scaled[j].softmax(dim=-1), None))  # plain temperature sampling
         else:
             out.append(_full_sort(scaled[j], int(top_k[j]), float(top_p[j])))
     return out

@@ -82,12 +82,37 @@ def timed(fn, logits: torch.Tensor, batch: int, reps: int) -> float:
     return (time.perf_counter() - t) / reps
 
 
+def same_seed_check(logits: torch.Tensor, batch: int, rows: int = 128) -> dict:
+    """Compare actual token picks while each row's generator advances across several steps."""
+    mismatches = 0
+    first = None
+    compared = 0
+    for seed in (0, 7, 42):
+        old_gen = [sampling.make_generator(seed + i) for i in range(batch)]
+        new_gen = [sampling.make_generator(seed + i) for i in range(batch)]
+        for start in range(0, min(rows, len(logits)), batch):
+            chunk = logits[start:start + batch]
+            params = [SamplingParams(temperature=0.7, top_p=0.95)] * len(chunk)
+            old = full_sort(chunk, params, old_gen[:len(chunk)])
+            new = sampling.sample(chunk, params, new_gen[:len(chunk)])
+            for i, (a, b) in enumerate(zip(old, new, strict=True)):
+                if a != b:
+                    mismatches += 1
+                    if first is None:
+                        first = {"seed": seed, "logit_row": start + i, "batch_row": i,
+                                 "full_sort": a, "candidates": b}
+                compared += 1
+    return {"compared_tokens": compared, "mismatches": mismatches,
+            "first_mismatch": first, "logit_rows_per_seed": min(rows, len(logits))}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--preset", default="qwen2.5-3b-mlx4")
     ap.add_argument("--steps", type=int, default=32, help="decode steps per prompt")
     ap.add_argument("--batches", default="1,8,32")
     ap.add_argument("--reps", type=int, default=40)
+    ap.add_argument("--equiv-rows", type=int, default=128)
     ap.add_argument("--manifest", default=None)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -97,7 +122,14 @@ def main() -> None:
     fallbacks = sum(ids is not None and ids.numel() == logits.shape[1] for _, ids in probs)
     kept = [int((p > 0).sum()) for p, _ in probs]
     rows = []
-    for b in [int(x) for x in args.batches.split(",")]:
+    batches = [int(x) for x in args.batches.split(",")]
+    equivalence = {str(b): same_seed_check(logits, b, args.equiv_rows) for b in batches}
+    mismatches = sum(v["mismatches"] for v in equivalence.values())
+    if mismatches:
+        Path(args.out).write_text(json.dumps({"preset": args.preset,
+            "same_seed_check": equivalence, "runs": []}, indent=1) + "\n")
+        raise SystemExit(f"{mismatches} same-seed token mismatches; saved check to {args.out}")
+    for b in batches:
         old = timed(full_sort, logits, b, args.reps)
         new = timed(sampling.sample, logits, b, args.reps)
         rows.append({"batch": b, "full_sort_ms": round(old * 1e3, 3),
@@ -107,7 +139,8 @@ def main() -> None:
            "candidates": sampling.CANDIDATES, "temperature": 0.7, "top_p": 0.95,
            "fallback_rows": fallbacks, "nucleus_size_p50": sorted(kept)[len(kept) // 2],
            "nucleus_size_max": max(kept), "torch_threads": torch.get_num_threads(),
-           "runs": rows, "manifest": manifest(args.manifest, {"target": "sampler"})}
+           "same_seed_check": equivalence, "runs": rows,
+           "manifest": manifest(args.manifest, {"target": "sampler"})}
     Path(args.out).write_text(json.dumps(out, indent=1) + "\n")
     print(f"wrote {args.out}", file=sys.stderr)
 
