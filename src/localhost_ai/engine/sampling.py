@@ -89,7 +89,7 @@ def nucleus(scaled: torch.Tensor, params: list[SamplingParams],
     # torch.sort can order equal logits differently, which changes a seeded multinomial pick.
     ranked, ranked_idx = scaled.topk(min(vocab, k + 1), dim=-1)
     vals, idx = ranked[:, :k], ranked_idx[:, :k]
-    tied = (ranked[:, 1:] == ranked[:, :-1]).any(dim=-1)
+    tied = ((ranked[:, 1:] == ranked[:, :-1]) & ranked[:, 1:].isfinite()).any(dim=-1)
     kmask = torch.arange(k).unsqueeze(0) >= top_k.clamp(max=k).unsqueeze(1)
     cut = top_k <= k  # top-k ends inside the candidates: renormalize over the top-k
     within = vals.masked_fill(kmask, float("-inf")).softmax(dim=-1)
@@ -99,7 +99,7 @@ def nucleus(scaled: torch.Tensor, params: list[SamplingParams],
     mask = kmask | ((probs.cumsum(dim=-1) - probs) >= top_p.unsqueeze(1))
     final = vals.masked_fill(mask, float("-inf")).softmax(dim=-1)
     # Without top-k, the nucleus ends inside the candidates if they hold top_p of the mass.
-    fits = cut | ((top_p < 1.0) & (whole.sum(dim=-1) >= top_p))
+    fits = cut | ((top_k == vocab) & (top_p < 1.0) & (whole.sum(dim=-1) >= top_p))
     out: list[tuple[torch.Tensor, torch.Tensor | None]] = []
     for j in range(len(params)):
         if tied[j] or (top_k[j] == vocab and top_p[j] >= 1.0):
