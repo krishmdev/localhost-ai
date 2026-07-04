@@ -227,7 +227,8 @@ sampled rows the nucleus is looked for among the top 256 logits (`topk`), with p
 taken relative to the full row's logsumexp. If those 256 hold at least top-p of the mass, or
 top-k already cuts inside them, the result is the same as sorting the whole vocabulary.
 Otherwise that row falls back to the full sort. Pure temperature sampling (top-p 1, no top-k)
-draws from the full softmax without sorting. The old sampler sorted all 151,936 Qwen logits
+routes through the full sort to preserve exact seeded multinomial draw sequences against the
+reference sampler. The old sampler sorted all 151,936 Qwen logits
 for every sampled row, which took about as long as the model's decode step. The measurement is
 in [bench/RESULTS.md](../bench/RESULTS.md), and `tests/test_sampling.py` checks the new
 distribution against the full sort on flat and peaked logits.
