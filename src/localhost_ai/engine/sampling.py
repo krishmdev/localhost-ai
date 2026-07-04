@@ -44,10 +44,21 @@ def sample(logits: torch.Tensor, params: list[SamplingParams],
 
 
 # Candidates kept per sampled row before top-k/top-p. Sorting a full 150k vocabulary on the
-# CPU took 13 ms per row per step (Qwen2.5-3B), about as long as the model's decode step, so the
-# nucleus is looked for among the top CANDIDATES logits first. Rows whose nucleus doesn't fit
-# there (a very flat distribution) fall back to the full sort, so the result is exact either way.
+# CPU took 10-13 ms per row per step (Qwen2.5-3B), about as long as the model's decode step, so
+# the nucleus is looked for among the top CANDIDATES logits first.
+#
+# Seeded rows must give the same tokens as the full-sort sampler this replaced (d2717ca), for
+# the same seed. That holds when (1) the nucleus ends inside the candidates, (2) no two logits
+# in the nucleus, or at its edge, are equal (torch.sort orders ties differently from
+# torch.topk, which would put a different token at a position), and (3) no cumulative sum is
+# within TOP_P_TOL of top_p (the candidate sums round differently from the full sort's, so a
+# token right at the cut could flip). The draw then uses the very vector the full sort built:
+# the kept logits in rank order, -inf to the full vocabulary length, softmax, multinomial,
+# which also consumes the row's generator exactly as before. Rows that fail a check are sorted
+# in full. Unseeded rows have no sequence to reproduce, so they draw from the candidates
+# directly, which is the same distribution and much cheaper.
 CANDIDATES = 256
+TOP_P_TOL = 1e-4
 
 
 def _pick(logits: torch.Tensor, params: list[SamplingParams],
@@ -62,16 +73,7 @@ def _pick(logits: torch.Tensor, params: list[SamplingParams],
     temps = torch.tensor([params[i].temperature for i in rows]).unsqueeze(1)
     sub = sub / temps
     for j, (probs, ids) in enumerate(nucleus(sub, [params[i] for i in rows])):
-        # torch.multinomial's seeded draw depends on vector length, even when the extra
-        # probabilities are all zero. Keep the original full-vocabulary length and sorted
-        # rank positions while avoiding a full sort of the logits on the candidate path.
-        if ids is not None and probs.numel() < sub.shape[-1]:
-            full = torch.zeros(sub.shape[-1], dtype=probs.dtype)
-            full[:probs.numel()] = probs
-            draw = full
-        else:
-            draw = probs
-        pick = int(torch.multinomial(draw, 1, generator=generators[rows[j]]))
+        pick = int(torch.multinomial(probs, 1, generator=generators[rows[j]]))
         out[rows[j]] = pick if ids is None else int(ids[pick])
     return out
 
@@ -79,44 +81,75 @@ def _pick(logits: torch.Tensor, params: list[SamplingParams],
 def nucleus(scaled: torch.Tensor, params: list[SamplingParams],
             candidates: int = CANDIDATES) -> list[tuple[torch.Tensor, torch.Tensor | None]]:
     """Per row, the probabilities left after top-k and top-p (renormalized, 0 where cut) and
-    the token ids they belong to; ids None means the probabilities are over the whole
-    vocabulary in id order. `scaled` is already divided by the temperature."""
-    vocab = scaled.shape[-1]
+    the token id at each position; ids None means the probabilities are in id order. `scaled`
+    is already divided by the temperature. Drawing position `torch.multinomial(probs, 1)` with
+    the row's generator gives the pick (see the note on CANDIDATES for seeded rows)."""
+    n, vocab = scaled.shape
     k = min(vocab, candidates)
     top_k = torch.tensor([p.top_k if 0 < p.top_k < vocab else vocab for p in params])
     top_p = torch.tensor([p.top_p for p in params])
-    # Ask for one extra value so a tie at the candidate boundary is visible. torch.topk and
-    # torch.sort can order equal logits differently, which changes a seeded multinomial pick.
-    ranked, ranked_idx = scaled.topk(min(vocab, k + 1), dim=-1)
+    seeded = [p.seed is not None for p in params]
+    ranked, ranked_idx = scaled.topk(min(vocab, k + 1), dim=-1)  # sorted, descending
     vals, idx = ranked[:, :k], ranked_idx[:, :k]
-    tied = ((ranked[:, 1:] == ranked[:, :-1]) & ranked[:, 1:].isfinite()).any(dim=-1)
-    kmask = torch.arange(k).unsqueeze(0) >= top_k.clamp(max=k).unsqueeze(1)
+    pos = torch.arange(k).unsqueeze(0)
+    kmask = pos >= top_k.clamp(max=k).unsqueeze(1)
     cut = top_k <= k  # top-k ends inside the candidates: renormalize over the top-k
     within = vals.masked_fill(kmask, float("-inf")).softmax(dim=-1)
     whole = (vals - scaled.logsumexp(dim=-1, keepdim=True)).exp()  # share of the full vocab
     probs = torch.where(cut.unsqueeze(1), within, whole)
     # Keep the smallest prefix whose mass reaches top_p (the first token always survives).
-    mask = kmask | ((probs.cumsum(dim=-1) - probs) >= top_p.unsqueeze(1))
+    cum_before = probs.cumsum(dim=-1) - probs
+    mask = kmask | (cum_before >= top_p.unsqueeze(1))
     final = vals.masked_fill(mask, float("-inf")).softmax(dim=-1)
-    # Without top-k, the nucleus ends inside the candidates if they hold top_p of the mass.
-    fits = cut | ((top_k == vocab) & (top_p < 1.0) & (whole.sum(dim=-1) >= top_p))
-    out: list[tuple[torch.Tensor, torch.Tensor | None]] = []
-    for j in range(len(params)):
-        if tied[j] or (top_k[j] == vocab and top_p[j] >= 1.0):
-            # Plain temperature sampling and ties need the original full-sort order to
-            # preserve the exact token sequence for an existing seed.
-            out.append(_full_sort(scaled[j], int(top_k[j]), float(top_p[j])))
-        elif fits[j]:
-            out.append((final[j], idx[j]))
+    kept = (~mask).sum(dim=-1)
+    # The nucleus ends inside the candidates: top-k cuts there, or (no top-k) they carry top_p.
+    fits = cut | ((top_k == vocab) & (top_p < 1.0) & (whole.sum(dim=-1) >= top_p + TOP_P_TOL))
+    # Only for seeded rows: equal logits at positions 0..kept (the nucleus and its first
+    # excluded neighbour), and cumulative sums too close to top_p to be sure of the cut.
+    if len(ranked[0]) > k:
+        eq = ranked[:, 1:] == ranked[:, :-1]
+    else:  # the candidates are the whole vocabulary; nothing past the last one
+        eq = torch.cat([ranked[:, 1:] == ranked[:, :-1], torch.zeros(n, 1, dtype=torch.bool)], 1)
+    tied = (eq & (pos < kept.unsqueeze(1))).any(dim=-1)
+    near = ((cum_before - top_p.unsqueeze(1)).abs() <= TOP_P_TOL).any(dim=-1)
+
+    out: list[tuple[torch.Tensor, torch.Tensor | None] | None] = [None] * n
+    full_sort: list[int] = []
+    for j in range(n):
+        if not seeded[j]:
+            if fits[j]:
+                out[j] = (final[j], idx[j])
+            elif top_k[j] == vocab and top_p[j] >= 1.0:
+                out[j] = (scaled[j].softmax(dim=-1), None)  # plain temperature sampling
+            else:
+                full_sort.append(j)
+        elif fits[j] and not tied[j] and not near[j]:
+            out[j] = None  # filled below, as the full sort would have built it
         else:
-            out.append(_full_sort(scaled[j], int(top_k[j]), float(top_p[j])))
-    return out
+            full_sort.append(j)
+    exact = [j for j in range(n) if seeded[j] and out[j] is None and j not in full_sort]
+    if exact:
+        # The full sort's final vector: kept logits in rank order, -inf to full length.
+        rows = torch.full((len(exact), vocab), float("-inf"))
+        rows[:, :k] = vals[exact].masked_fill(mask[exact], float("-inf"))
+        drawn = rows.softmax(dim=-1)
+        for r, j in enumerate(exact):
+            out[j] = (drawn[r], idx[j])
+    if full_sort:
+        for j, pair in zip(full_sort, _full_sort(scaled[full_sort], top_k[full_sort],
+                                                 top_p[full_sort]), strict=True):
+            out[j] = pair
+    return out  # type: ignore[return-value]
 
 
-def _full_sort(row: torch.Tensor, top_k: int, top_p: float) -> tuple[torch.Tensor, torch.Tensor]:
-    """Top-k then top-p over the whole sorted vocabulary, for rows the candidates can't cover."""
-    sorted_logits, sorted_idx = row.sort(descending=True)
-    mask = torch.arange(row.shape[-1]) >= top_k
+def _full_sort(rows: torch.Tensor, top_k: torch.Tensor,
+               top_p: torch.Tensor) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    """Top-k then top-p over the whole sorted vocabulary, batched, exactly as the sampler
+    before the candidate set did it."""
+    sorted_logits, sorted_idx = rows.sort(dim=-1, descending=True)
+    ranks = torch.arange(rows.shape[-1]).unsqueeze(0)
+    mask = ranks >= top_k.unsqueeze(1)
     probs = sorted_logits.masked_fill(mask, float("-inf")).softmax(dim=-1)
-    mask |= (probs.cumsum(dim=-1) - probs) >= top_p
-    return sorted_logits.masked_fill(mask, float("-inf")).softmax(dim=-1), sorted_idx
+    mask |= (probs.cumsum(dim=-1) - probs) >= top_p.unsqueeze(1)
+    probs = sorted_logits.masked_fill(mask, float("-inf")).softmax(dim=-1)
+    return [(probs[j], sorted_idx[j]) for j in range(len(rows))]

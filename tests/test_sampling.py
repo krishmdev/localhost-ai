@@ -79,8 +79,10 @@ def test_nucleus_preserves_full_sort_seeded_tokens(top_k, top_p, ties, vocab, sc
     logits = torch.randn(12, vocab, generator=g) * scale
     if ties:
         logits = logits.round()
-    params = [SamplingParams(temperature=0.8, top_k=top_k, top_p=top_p)] * len(logits)
     for seed in (0, 1, 7, 42):
+        # the scheduler builds each row's generator from params.seed
+        params = [SamplingParams(temperature=0.8, top_k=top_k, top_p=top_p, seed=seed + i)
+                  for i in range(len(logits))]
         got = sample(logits, params, [make_generator(seed + i) for i in range(len(logits))])
         want = []
         for i, row in enumerate(logits):
@@ -93,3 +95,75 @@ def test_nucleus_preserves_full_sort_seeded_tokens(top_k, top_p, ties, vocab, sc
             pick = torch.multinomial(probs, 1, generator=make_generator(seed + i))
             want.append(int(ids[pick]))
         assert got == want, (top_k, top_p, ties, seed)
+
+
+def old_sampler(logits, params, generators):
+    """The sampler before the candidate set, verbatim from d2717ca: sort the whole batch."""
+    logits = logits.detach().to("cpu", torch.float32)
+    out = logits.argmax(dim=-1).tolist()
+    rows = [i for i, p in enumerate(params) if not p.greedy]
+    if not rows:
+        return out
+    sub = logits[rows]
+    temps = torch.tensor([params[i].temperature for i in rows]).unsqueeze(1)
+    sub = sub / temps
+    sorted_logits, sorted_idx = sub.sort(dim=-1, descending=True)
+    vocab = sub.shape[-1]
+    ranks = torch.arange(vocab).unsqueeze(0)
+    top_k = torch.tensor([params[i].top_k if params[i].top_k > 0 else vocab for i in rows])
+    mask = ranks >= top_k.unsqueeze(1)
+    probs = sorted_logits.masked_fill(mask, float("-inf")).softmax(dim=-1)
+    top_p = torch.tensor([params[i].top_p for i in rows]).unsqueeze(1)
+    cum_before = probs.cumsum(dim=-1) - probs
+    mask |= cum_before >= top_p
+    probs = sorted_logits.masked_fill(mask, float("-inf")).softmax(dim=-1)
+    for j, i in enumerate(rows):
+        pick = torch.multinomial(probs[j], 1, generator=generators[i])
+        out[i] = int(sorted_idx[j, pick])
+    return out
+
+
+def lm_like(g, rows, vocab, peak):
+    """fp16-valued logits (so exact ties are common, as with 4-bit models) with a few strong
+    candidates on a noisy floor."""
+    x = torch.randn(rows, vocab, generator=g) * 2.0
+    top = torch.randint(0, vocab, (rows, 24), generator=g)
+    x.scatter_(1, top, torch.randn(rows, 24, generator=g) * 2.0 + peak)
+    return x.half().float()
+
+
+SEEDED = [dict(temperature=0.7, top_p=0.95), dict(temperature=1.0, top_p=0.9),
+          dict(temperature=0.7, top_p=0.5), dict(temperature=1.2, top_p=1.0, top_k=40),
+          dict(temperature=0.8, top_p=0.95, top_k=1), dict(temperature=0.6, top_p=0.9, top_k=300),
+          dict(temperature=1.0, top_p=1.0), dict(temperature=0.7, top_p=0.99, top_k=250)]
+
+
+@pytest.mark.parametrize("peak", [4.0, 9.0, 14.0])  # flat (mostly falls back) to peaked
+@pytest.mark.parametrize("masked", [False, True])  # response_format-style -inf masks
+def test_seeded_sequences_match_the_old_full_sort_sampler(peak, masked, monkeypatch):
+    from localhost_ai.engine import sampling
+
+    sorted_rows = []
+    orig = sampling._full_sort
+    monkeypatch.setattr(sampling, "_full_sort",
+                        lambda r, k, p: sorted_rows.append(len(r)) or orig(r, k, p))
+    g = torch.Generator().manual_seed(int(peak * 10) + masked)
+    vocab, steps = 32000, 24
+    params = [SamplingParams(seed=100 + i, **kw) for i, kw in enumerate(SEEDED)]
+    # unseeded neighbours in the same batch must not disturb the seeded rows
+    params += [SamplingParams(temperature=0.9, top_p=0.9), SamplingParams(temperature=0.0)]
+    old_g = [make_generator(p.seed) for p in params]
+    new_g = [make_generator(p.seed) for p in params]
+    old, new = [], []
+    for _ in range(steps):
+        logits = lm_like(g, len(params), vocab, peak)
+        if masked:
+            logits[::2, : vocab // 2] = float("-inf")
+        old.append(old_sampler(logits, params, old_g)[:len(SEEDED)])
+        new.append(sample(logits, params, new_g)[:len(SEEDED)])
+    assert new == old
+    # Two seeded configs always sort (top_k past the candidates; top_p 1 with no top_k). The
+    # rest must mostly take the candidate path on peaked logits, or this proves little.
+    by_design = 2 * steps
+    if peak >= 14.0:
+        assert sum(sorted_rows) - by_design < 0.25 * steps * (len(params) - 1 - 2)
