@@ -61,6 +61,7 @@ class Service:
     loader: Callable[[str], ModelParts] | None = None
     engine: AsyncEngine = field(init=False)
     swapping: bool = False
+    generation: int = field(default=0, init=False)
     _swap_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -107,6 +108,9 @@ class Service:
         self.engine.start()
 
     async def _swap(self, name: str, drain_timeout_s: float) -> None:
+        # Invalidate requests whose tokenizer/grammar was prepared before this swap. They
+        # must not submit an old constraint or adapter to the next model's engine.
+        self.generation += 1
         self.swapping = True
         try:
             waited = 0.0

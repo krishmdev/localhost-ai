@@ -84,26 +84,48 @@ def pick_adapter(svc: Service, body: ChatCompletionRequest) -> str | None:
     return body.adapter
 
 
-async def build_constraint(svc: Service, fmt: ResponseFormat | None):
+async def build_constraint(grammars: object | None, fmt: ResponseFormat | None):
     """The token-level constraint for a response_format, None for plain text. Built on a worker
     thread: the first one on a model also builds llguidance's view of the vocabulary, which
     takes a second or two and would otherwise stall every stream on the event loop."""
-    if fmt is None or fmt.type == "text" or svc.parts is None:
+    if fmt is None or fmt.type == "text":
         return None
-    return await asyncio.to_thread(constraint_for, svc, fmt)
+    return await asyncio.to_thread(constraint_for, grammars, fmt)
 
 
-def constraint_for(svc: Service, fmt: ResponseFormat | None):
+def constraint_for(grammars: object | None, fmt: ResponseFormat | None):
     """The token-level constraint for a response_format, None for plain text."""
     spec = fmt.as_dict() if fmt is not None else None
     if spec is None:
         return None
-    if svc.parts.grammars is None:
+    if grammars is None:
         raise HTTPException(400, "response_format is not supported for this model")
     try:
-        return svc.parts.grammars.constraint(spec)
+        return grammars.constraint(spec)
     except GrammarError as exc:
         raise HTTPException(400, f"invalid response_format: {exc}") from exc
+
+
+async def prepare_request(svc: Service, body: ChatCompletionRequest,
+                          messages: list[dict[str, str]]) -> tuple[Handle, str]:
+    """Prepare a request and submit it only to the model whose grammar was used.
+
+    Grammar construction runs in a thread and may finish after a hot-swap. Hold only its
+    tokenizer wrapper across that await, not the old model or engine, so a swap can free the
+    old weights before loading the new ones.
+    """
+    if svc.swapping or svc.parts is None:
+        raise HTTPException(503, "model is being replaced; retry shortly")
+    generation = svc.generation
+    adapter = pick_adapter(svc, body)
+    model_name = svc.model_name
+    grammars = svc.parts.grammars
+    constraint = await build_constraint(grammars, body.response_format)
+    if svc.swapping or svc.parts is None or svc.generation != generation:
+        raise HTTPException(503, "model changed while preparing the request; retry shortly")
+    handle = submit(svc, messages, lambda n: sampling_params(body, n, svc),
+                    constraint, adapter)
+    return handle, adapter or model_name
 
 
 def usage(done: DoneEvent) -> Usage:
@@ -130,26 +152,19 @@ async def list_models(request: Request) -> ModelList:
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(body: ChatCompletionRequest, request: Request):
     svc: Service = request.app.state.svc
-    try:
-        adapter = pick_adapter(svc, body)
-    except HTTPException as exc:
-        return error(exc.status_code, exc.detail, "invalid_request_error",
-                     "model_not_found" if exc.status_code == 404 else None)
     messages = [m.model_dump() for m in body.messages]
     try:
-        constraint = await build_constraint(svc, body.response_format)
-        handle = submit(svc, messages, lambda n: sampling_params(body, n, svc),
-                        constraint, adapter)
+        handle, served = await prepare_request(svc, body, messages)
     except QueueFull as exc:
         svc.metrics.rejected()
         return error(429, str(exc), "rate_limit_error", "queue_full",
                      {"Retry-After": str(max(1, round(exc.retry_after_s)))})
     except HTTPException as exc:
-        return error(exc.status_code, exc.detail, "invalid_request_error")
+        return error(exc.status_code, exc.detail, "invalid_request_error",
+                     "model_not_found" if exc.status_code == 404 else None)
 
     cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
-    served = adapter or svc.model_name
     if body.stream:
         include_usage = bool(body.stream_options and body.stream_options.include_usage)
         return StreamingResponse(

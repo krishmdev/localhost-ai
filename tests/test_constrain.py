@@ -303,3 +303,40 @@ def test_websocket_generate_with_response_format():
                 done = m
     assert done["finish_reason"] == "stop" and isinstance(json.loads(text), dict)
     assert errors[0]["id"] == "b" and errors[0]["code"] == "400"
+
+
+async def test_grammar_prepared_before_model_swap_cannot_reach_new_engine(monkeypatch):
+    import asyncio
+    from dataclasses import replace
+
+    from fastapi import HTTPException
+
+    from localhost_ai.api import openai_routes
+    from localhost_ai.api.schemas import ChatCompletionRequest
+
+    svc = json_service()
+    new_parts = replace(svc.parts, name="new-json", runner=JSONRunner(eos_ids=frozenset({EOS})),
+                        info={**svc.parts.info, "model": "new-json"})
+    svc.loader = lambda name: new_parts
+    svc.start()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def paused_constraint(_grammars, _fmt):
+        entered.set()
+        await release.wait()
+        return object()
+
+    monkeypatch.setattr(openai_routes, "build_constraint", paused_constraint)
+    body = ChatCompletionRequest(messages=MSG, response_format={"type": "json_object"})
+    try:
+        preparing = asyncio.create_task(openai_routes.prepare_request(svc, body, MSG))
+        await entered.wait()
+        await svc.swap_model("new-json")
+        release.set()
+        with pytest.raises(HTTPException) as exc:
+            await preparing
+        assert exc.value.status_code == 503
+        assert svc.engine.scheduler.waiting == [] or not svc.engine.scheduler.waiting
+    finally:
+        release.set()
+        svc.stop()
