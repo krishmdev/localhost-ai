@@ -48,14 +48,16 @@ class JSONConstraint:
         the extra padding rows are never allowed)."""
         mask = np.zeros(width, dtype=bool)
         if self.failed or self.matcher.is_error():
-            mask[[i for i in self.eos_ids if i < width]] = True
+            eos = [i for i in self.eos_ids if i < width] or [0]
+            mask[eos] = True
             return torch.from_numpy(mask)
         self.matcher.unsafe_compute_mask_ptr(self._words.ctypes.data, self._words.nbytes)
         bits = np.unpackbits(self._words.view(np.uint8), bitorder="little")
         n = min(width, self.vocab)
         mask[:n] = bits[:n]
         if not mask.any():  # can't happen for a valid grammar; end the row rather than crash
-            mask[[i for i in self.eos_ids if i < width]] = True
+            eos = [i for i in self.eos_ids if i < width] or [0]
+            mask[eos] = True
         return torch.from_numpy(mask)
 
     def advance(self, token: int) -> None:
