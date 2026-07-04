@@ -250,6 +250,9 @@ Memory pressure, same-session pair on the current code (CPU container capped at 
 Earlier pressure runs (before the guard, and an AIMD-only run) are in RESULTS.md; they come from different host windows and aren't compared here.
 <!-- results:end -->
 
+<!-- comparison:begin -->
+<!-- comparison:end -->
+
 Grafana dashboard during the trimmed Docker CPU sweep (the batch limit steps are the sweep switching modes; AIMD held L at 16 there):
 
 ![Grafana dashboard](docs/grafana.png)

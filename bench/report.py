@@ -321,6 +321,7 @@ def main() -> None:
               for lbl in ("mps-native", "cpu-docker") if (FIG / f"aimd_trace_{lbl}.png").exists()]
     write_section(ROOT / "docs" / "controller.md", "trace", "\n".join(traces))
     write_section(ROOT / "README.md", "results", "\n".join(readme_summary()))
+    write_section(ROOT / "README.md", "comparison", "\n".join(features_report.readme_lines()))
     print("wrote bench/RESULTS.md")
 
 

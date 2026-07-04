@@ -183,5 +183,41 @@ def json_section(host_line) -> list[str]:
     return out + ["", f"Host: {host_line(d['manifest'])}", ""]
 
 
+def readme_lines() -> list[str]:
+    """README block: the comparison at one client and at the highest concurrency, plus the
+    response_format cost, pointing at RESULTS.md for the rest."""
+    d = load("baseline-qwen2.5-3b")
+    out: list[str] = []
+    if d:
+        concs = sorted({p["concurrency"] for e in d["engines"] for p in e["points"]})
+        lo, hi = concs[0], concs[-1]
+        out += ["Against other local servers on the same Mac, Qwen2.5-3B-Instruct 4-bit (MLX "
+                "4-bit for the MLX engines, Q4_K_M GGUF for llama.cpp and Ollama), same "
+                "client and prompts:", "",
+                f"| engine | tok/s, {lo} client | TPOT p50, {lo} client | tok/s, {hi} clients "
+                f"| TPOT p50, {hi} clients | TTFT p50, {hi} clients | peak footprint |",
+                "|---|---:|---:|---:|---:|---:|---:|"]
+        for e in d["engines"]:
+            by = {p["concurrency"]: p for p in e["points"]}
+            a, b = by.get(lo), by.get(hi)
+            if not a or not b:
+                continue
+            peak = max(p["peak_footprint_bytes"] for p in e["points"])
+            out.append(f"| {ENGINE_NAMES.get(e['name'], e['name'])} | "
+                       f"{a['out_tok_per_s']:.0f} | {fmt(a['tpot_p50_ms'])} ms | "
+                       f"{b['out_tok_per_s']:.0f} | {fmt(b['tpot_p50_ms'])} ms | "
+                       f"{fmt(b['ttft_p50_ms'], 0)} ms | {gib(peak)} GiB |")
+        out += ["", "The quantizations differ and the other servers cache repeated prompt "
+                "prefixes by default; the full table and caveats are in RESULTS.md."]
+    j = load("json-overhead")
+    if j:
+        masks = [r["mask_ms_per_row_token"] for r in j["runs"] if r["mask_ms_per_row_token"]]
+        if masks:
+            out += ["", f"`response_format` costs {min(masks):.2f}-{max(masks):.2f} ms of CPU "
+                    f"per constrained row per token on `{j['preset']}` "
+                    "(RESULTS.md has step times with and without it)."]
+    return out
+
+
 def sections(host_line) -> list[str]:
     return baseline_section(host_line) + sampler_section(host_line) + json_section(host_line)
