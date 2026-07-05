@@ -78,6 +78,10 @@ async def ws_generate(ws: WebSocket) -> None:
     await ws.accept()
     conn = _Conn(ws)
     handles: dict[str, Handle] = {}
+    # ids whose request is still being prepared (the first constrained request on a model
+    # builds the llguidance tokenizer, 1-2 s), and which of those were cancelled meanwhile
+    preparing: set[str] = set()
+    cancelled: set[str] = set()
     tasks: set[asyncio.Task] = set()
 
     async def pump(rid: str, handle: Handle) -> None:
@@ -99,6 +103,48 @@ async def ws_generate(ws: WebSocket) -> None:
         finally:
             handles.pop(rid, None)
 
+    async def start(rid: str, msg: dict[str, Any]) -> None:
+        """Prepare, submit and stream one request. Runs as its own task so the receive loop
+        keeps reading (other generates, cancels) while this one is being prepared."""
+        try:
+            try:
+                body = ChatCompletionRequest(**{k: v for k, v in msg.items()
+                                                if k not in ("type", "id")})
+                handle, _served = await prepare_request(
+                    svc, body, [m.model_dump() for m in body.messages])
+            except ValidationError as exc:
+                await conn.send({"type": "error", "id": rid, "code": "invalid_request",
+                                 "message": exc.errors()[0]["msg"]})
+                return
+            except QueueFull as exc:
+                svc.metrics.rejected()
+                await conn.send({"type": "error", "id": rid, "code": "queue_full",
+                                 "message": str(exc), "retry_after_s": exc.retry_after_s})
+                return
+            except HTTPException as exc:
+                await conn.send({"type": "error", "id": rid, "code": str(exc.status_code),
+                                 "message": exc.detail})
+                return
+            except Exception as exc:  # don't drop the request silently
+                await conn.send({"type": "error", "id": rid, "code": "engine_error",
+                                 "message": str(exc)})
+                return
+            finally:
+                preparing.discard(rid)
+            handles[rid] = handle
+            if rid in cancelled:
+                handle.cancel()  # the done event still reports it as cancelled
+            await conn.send({"type": "accepted", "id": rid,
+                             "queue_position": handle.queue_position})
+        except (WebSocketDisconnect, RuntimeError):
+            h = handles.pop(rid, None)
+            if h is not None:
+                h.cancel()
+            return
+        finally:
+            cancelled.discard(rid)
+        await pump(rid, handle)
+
     try:
         while True:
             try:
@@ -114,37 +160,19 @@ async def ws_generate(ws: WebSocket) -> None:
                 h = handles.get(rid)
                 if h is not None:
                     h.cancel()
+                elif rid in preparing:
+                    cancelled.add(rid)
                 continue
             if kind != "generate":
                 await conn.send({"type": "error", "id": rid or None,
                                  "message": f"unknown message type {kind!r}"})
                 continue
-            if not rid or rid in handles:
+            if not rid or rid in handles or rid in preparing:
                 await conn.send({"type": "error", "id": rid or None,
                                  "message": "each generate needs a unique id"})
                 continue
-            try:
-                body = ChatCompletionRequest(**{k: v for k, v in msg.items()
-                                                if k not in ("type", "id")})
-                handle, _served = await prepare_request(
-                    svc, body, [m.model_dump() for m in body.messages])
-            except ValidationError as exc:
-                await conn.send({"type": "error", "id": rid, "code": "invalid_request",
-                                 "message": exc.errors()[0]["msg"]})
-                continue
-            except QueueFull as exc:
-                svc.metrics.rejected()
-                await conn.send({"type": "error", "id": rid, "code": "queue_full",
-                                 "message": str(exc), "retry_after_s": exc.retry_after_s})
-                continue
-            except HTTPException as exc:
-                await conn.send({"type": "error", "id": rid, "code": str(exc.status_code),
-                                 "message": exc.detail})
-                continue
-            handles[rid] = handle
-            await conn.send({"type": "accepted", "id": rid,
-                             "queue_position": handle.queue_position})
-            task = asyncio.create_task(pump(rid, handle))
+            preparing.add(rid)
+            task = asyncio.create_task(start(rid, msg))
             tasks.add(task)
             task.add_done_callback(tasks.discard)
     except WebSocketDisconnect:

@@ -161,3 +161,35 @@ def test_unknown_host_header_rejected():
     with TestClient(create_app(fake_service())) as c:
         assert c.get("/healthz", headers={"host": "attacker.example"}).status_code == 400
         assert c.get("/healthz", headers={"host": "127.0.0.1:8000"}).status_code == 200
+
+
+def test_a_slow_prepare_does_not_block_other_requests_or_cancels(monkeypatch):
+    """The first constrained request on a model builds the grammar tokenizer (1-2 s). Other
+    generates on the socket must run meanwhile, and a cancel sent during it must stick."""
+    import asyncio
+
+    from localhost_ai.api import ws_routes
+
+    real = ws_routes.prepare_request
+
+    async def slow(svc, body, messages):
+        if "slow" in messages[0]["content"]:
+            await asyncio.sleep(0.5)
+        return await real(svc, body, messages)
+
+    monkeypatch.setattr(ws_routes, "prepare_request", slow)
+    with TestClient(create_app(fake_service())) as c, c.websocket_connect("/v1/ws/generate") as ws:
+        ws.send_json(gen("slow-a", 4))
+        ws.send_json(gen("slow-b", 50))
+        ws.send_json(gen("slow-a", 4))  # still preparing: the id is taken
+        ws.send_json({"type": "cancel", "id": "slow-b"})
+        ws.send_json(gen("fast", 3))
+        order = []
+        while len([m for m in order if m["type"] in ("done", "error")]) < 4:
+            order.append(ws.receive_json())
+        ends = [(m["id"], m["type"]) for m in order if m["type"] in ("done", "error")]
+        assert ends[0] == ("slow-a", "error")  # the duplicate id, answered right away
+        assert ends[1] == ("fast", "done")  # finished while the slow ones were preparing
+        done = {m["id"]: m for m in order if m["type"] == "done"}
+        assert done["slow-a"]["finish_reason"] == "length"
+        assert done["slow-b"]["finish_reason"] == "cancelled"
