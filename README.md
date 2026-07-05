@@ -293,8 +293,8 @@ caches work and what differs from the torch path.
 
 ## Tests
 
-- `make test`: 288 tests, most with a deterministic fake model. Without the mlx extra (any
-  machine that isn't Apple silicon) the 52 MLX tests skip and 236 run. They cover the
+- `make test`: 369 tests, most with a deterministic fake model. Without the mlx extra (any
+  machine that isn't Apple silicon) the 64 MLX tests don't run and 305 do. They cover the
   controller rules and the S1-S6 simulator bounds over 20 seeds, the scheduler (FIFO, stop
   strings, cancel, 429, OOM preemption equivalence, merge OOM, no OOM thrash, a prefill-heavy
   closed loop), KV merge/select/crop, sampling, detokenization, probes, the OpenAI SDK against
