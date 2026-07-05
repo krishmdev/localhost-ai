@@ -334,13 +334,33 @@ def manifest(cmd: str | None, extra: dict) -> dict:
     script that prints one JSON object; otherwise a basic built-in record is used."""
     path = cmd or os.environ.get("LHAI_RUN_MANIFEST", "")
     if not path or not Path(path).exists():
-        return basic_manifest(extra)
-    kv = [f"{k}={v}" for k, v in extra.items()]
-    out = subprocess.run([sys.executable, path, *kv], capture_output=True, text=True, timeout=60)
-    try:
-        return json.loads(out.stdout)
-    except json.JSONDecodeError:
-        return {"error": out.stderr[-500:]}
+        rec = basic_manifest(extra)
+    else:
+        kv = [f"{k}={v}" for k, v in extra.items()]
+        out = subprocess.run([sys.executable, path, *kv], capture_output=True, text=True,
+                             timeout=60)
+        try:
+            rec = json.loads(out.stdout)
+        except json.JSONDecodeError:
+            rec = {"error": out.stderr[-500:]}
+    rec["code"] = code_state()
+    return rec
+
+
+def code_state() -> dict:
+    """The commit the benchmark ran from, and whether tracked files differed from it."""
+    root = Path(__file__).resolve().parent.parent
+
+    def git(*args: str) -> str:
+        try:
+            return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
+                                  timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    return {"commit": git("rev-parse", "HEAD") or None,
+            "branch": git("rev-parse", "--abbrev-ref", "HEAD") or None,
+            "dirty": bool(git("status", "--porcelain", "--untracked-files=no"))}
 
 
 async def main_async(args) -> dict:
