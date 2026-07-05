@@ -121,7 +121,8 @@ def check(loaded, shaped, plain, alone):
                 continue
             gaps = solo_gaps(loaded, q.prompt_ids, q.generated)
             worst = max(gaps)
-            first = next(i for i, g in enumerate(gaps) if g > 0)
+            # None: every batched token was an exact tie with (or was) the solo argmax
+            first = next((i for i, g in enumerate(gaps) if g > 0), None)
             print(f"batched row left the solo argmax first at token {first}; "
                   f"largest solo logit gap {worst:.4f}")
             assert worst <= NEAR_TIE, (first, worst)
