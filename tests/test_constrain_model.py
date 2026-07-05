@@ -55,7 +55,7 @@ def test_real_tokenizer_grammar(preset):
     for t in tok.encode(good, add_special_tokens=False):
         assert c.allowed(len(tok))[t], tok.decode([t])
         c.advance(t)
-    assert c.allowed(len(tok))[tok.eos_token_id] and not c.failed
+    assert c.allowed(len(tok))[tok.eos_token_id] and c.broken is None
     fresh = grammars.constraint({"type": "json_object"})
     allowed = fresh.allowed(len(tok) + 64)
     assert not allowed[len(tok):].any()  # ids past the tokenizer's vocab never

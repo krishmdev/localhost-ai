@@ -41,28 +41,37 @@ class JSONConstraint:
         self.vocab = ll_tokenizer.vocab_size
         self.eos_ids = sorted(eos_ids)
         self._words = np.zeros((self.vocab + 31) // 32, dtype=np.int32)
-        self.failed = False
+        # Set when the row can't go on; the scheduler then ends it without keeping the token
+        # sampled at that step. `complete`: the JSON is whole but no end-of-sequence token fits
+        # the logits, so it finishes with "stop". `broken`: the matcher failed, and the row
+        # ends with an error rather than an unparseable "stop".
+        self.complete = False
+        self.broken: str | None = None
 
     def allowed(self, width: int) -> torch.Tensor:
         """Bool mask over the model's logits (`width` may be larger than the tokenizer's vocab;
-        the extra padding rows are never allowed)."""
+        the extra padding rows are never allowed). All True once the row has to end, since the
+        scheduler drops that step's token."""
         mask = np.zeros(width, dtype=bool)
-        if self.failed or self.matcher.is_error():
-            eos = [i for i in self.eos_ids if i < width] or [0]
-            mask[eos] = True
-            return torch.from_numpy(mask)
-        self.matcher.unsafe_compute_mask_ptr(self._words.ctypes.data, self._words.nbytes)
-        bits = np.unpackbits(self._words.view(np.uint8), bitorder="little")
-        n = min(width, self.vocab)
-        mask[:n] = bits[:n]
-        if not mask.any():  # can't happen for a valid grammar; end the row rather than crash
-            eos = [i for i in self.eos_ids if i < width] or [0]
-            mask[eos] = True
+        if self.broken is None and self.matcher.is_error():
+            self.broken = f"grammar matcher error: {self.matcher.get_error()}"
+        if self.broken is None and not self.complete:
+            self.matcher.unsafe_compute_mask_ptr(self._words.ctypes.data, self._words.nbytes)
+            bits = np.unpackbits(self._words.view(np.uint8), bitorder="little")
+            n = min(width, self.vocab)
+            mask[:n] = bits[:n]
+            if not mask.any():
+                if self.matcher.is_accepting():
+                    self.complete = True
+                else:
+                    self.broken = "the grammar allows no token here"
+        if self.broken is not None or self.complete:
+            mask[:] = True
         return torch.from_numpy(mask)
 
     def advance(self, token: int) -> None:
-        if not self.failed and not self.matcher.consume_token(token):
-            self.failed = True  # from here on only EOS is allowed
+        if self.broken is None and not self.complete and not self.matcher.consume_token(token):
+            self.broken = f"the grammar rejected token {token}"
 
     @property
     def done(self) -> bool:

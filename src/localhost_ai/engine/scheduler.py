@@ -472,6 +472,13 @@ class Scheduler:
 
     def _accept(self, r: Request, token: int) -> bool:
         """Record one generated token. Returns False if the request is finished."""
+        c = r.constraint
+        if c is not None and (c.complete or c.broken):  # this step's token is dropped
+            if c.broken:
+                self._fail(r, f"response_format: {c.broken}")
+            else:
+                self._finish(r, "stop")
+            return False
         now = self.clock()
         r.generated.append(token)
         if r.first_token_at is None:

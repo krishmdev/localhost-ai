@@ -13,7 +13,7 @@ from test_scheduler import Clock, done, drain, req
 
 from localhost_ai.engine.constrain import GrammarError, Grammars, grammar_for
 from localhost_ai.engine.controller import FixedController
-from localhost_ai.engine.request import SamplingParams
+from localhost_ai.engine.request import ErrorEvent, SamplingParams
 from localhost_ai.engine.sampling import make_generator, sample
 from localhost_ai.engine.scheduler import Scheduler, SchedulerConfig
 
@@ -117,6 +117,41 @@ def test_json_object_outputs_that_stop_always_parse():
     for r in stopped:
         assert isinstance(json.loads(text(r)), dict), text(r)
         assert r.generated[-1] == EOS and r.constraint.done
+
+
+
+class NoEOSRunner(JSONRunner):
+    """Logits one column short, so the end-of-sequence token never fits the mask."""
+
+    def _logits(self, rows):
+        return super()._logits(rows)[:, :EOS]
+
+
+def test_complete_json_with_no_eos_in_the_logits_finishes_with_stop():
+    rs = run({"type": "json_object"}, n=12, runner=NoEOSRunner(eos_ids=frozenset({EOS})))
+    for r in rs:
+        d = done(r)
+        if d.finish_reason == "stop":  # the grammar completed; nothing forced after it
+            assert isinstance(json.loads(text(r)), dict), text(r)
+            assert EOS not in r.generated and r.constraint.complete
+        else:
+            assert d.finish_reason == "length" and not r.constraint.complete
+    assert sum(done(r).finish_reason == "stop" for r in rs) >= 6
+
+
+def test_a_failed_matcher_ends_the_row_with_an_error(monkeypatch):
+    s = sched()
+    r = req([1, 2, 3], SamplingParams(temperature=1.0, seed=3, max_tokens=96))
+    r.constraint = GRAMMARS.constraint({"type": "json_object"})
+    calls = []
+    real = r.constraint.matcher.consume_token
+    r.constraint.matcher = type("M", (), {
+        "consume_token": lambda self, t: calls.append(t) or (len(calls) < 3 and real(t)),
+        "__getattr__": lambda self, name: getattr(real.__self__, name)})()
+    s.add(r)
+    drain(s)
+    assert isinstance(done(r), ErrorEvent) and "rejected" in done(r).message
+    assert r.finish_reason == "error" and len(r.generated) == 2  # the rejected pick is dropped
 
 
 def test_json_schema_outputs_match_the_schema():
