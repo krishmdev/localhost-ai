@@ -222,16 +222,30 @@ savings that matter for the shared-system-prompt workload without it.
 ## Sampling (`engine/sampling.py`)
 
 Both backends hand CPU float32 logits to one `sample()`, which is where per-row temperature,
-top-k, top-p, seeds and `response_format` masks are applied. Greedy rows take the argmax. For
-sampled rows the nucleus is looked for among the top 256 logits (`topk`), with probabilities
-taken relative to the full row's logsumexp. If those 256 hold at least top-p of the mass, or
-top-k already cuts inside them, the result is the same as sorting the whole vocabulary.
-Otherwise that row falls back to the full sort. Pure temperature sampling (top-p 1, no top-k)
-routes through the full sort to preserve exact seeded multinomial draw sequences against the
-reference sampler. The old sampler sorted all 151,936 Qwen logits
-for every sampled row, which took about as long as the model's decode step. The measurement is
-in [bench/RESULTS.md](../bench/RESULTS.md), and `tests/test_sampling.py` checks the new
-distribution against the full sort on flat and peaked logits.
+top-k, top-p, seeds and `response_format` masks are applied. Greedy rows take the argmax.
+Sorting all 151,936 Qwen logits for every sampled row took 10-13 ms on this CPU, about as long
+as the model's decode step, so sampled rows first take the top 256 logits (`topk`), with
+probabilities relative to the full row's logsumexp. The nucleus "fits" when top-k cuts inside
+those 256, or when they hold at least top-p of the mass. After that, seeded and unseeded rows
+are handled differently:
+
+- **Seeded rows** (`seed` set) must give the same tokens for the same seed as the full-sort
+  sampler this replaced. They take the candidate path only when the nucleus fits, no two logits
+  inside it or at its first excluded neighbour are equal (`sort` and `topk` order ties
+  differently), and no cumulative sum is within `top_p_tol(vocab)` of top-p (the two paths
+  normalize differently and drift apart by about 2e-4 at 151,936 tokens and 3.4e-4 at
+  262,144; the tolerance is `max(1e-4, 4e-9 * vocab)`). The draw then uses the vector the full
+  sort would have built (kept logits in rank order, -inf out to the full vocabulary, softmax,
+  multinomial), so the row's generator is consumed exactly as before. Anything else, including
+  top-p 1 with no top-k, is sorted in full.
+- **Unseeded rows** have no sequence to reproduce, so a fitting nucleus is drawn from the 256
+  candidates directly, and plain temperature sampling (top-p 1, no top-k) is a softmax over the
+  whole row with no sort. Only a nucleus that doesn't fit is sorted.
+
+`tests/test_sampling.py` compares 24-step seeded sequences with a verbatim copy of the old
+sampler on fp16-valued, tie-heavy logits, with and without `response_format`-style masks, and
+puts top-p between the two paths' cumulative sums at the Qwen and Gemma 4 vocabulary sizes.
+The unseeded distribution is checked against the full sort on flat and peaked logits.
 
 ## Constrained decoding (`engine/constrain.py`)
 
