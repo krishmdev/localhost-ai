@@ -27,7 +27,9 @@ class JSONSchemaFormat(BaseModel):
 
 class ResponseFormat(BaseModel):
     """`text` (the default), `json_object` (any JSON object) or `json_schema`. The JSON types are
-    enforced token by token, so a response that finishes with `stop` always parses."""
+    enforced token by token, so a response that finishes with `stop` parses. They can't be
+    combined with `stop` strings (400), and a row whose grammar matcher fails ends with an
+    error instead of `stop`."""
 
     type: Literal["text", "json_object", "json_schema"] = "text"
     json_schema: JSONSchemaFormat | None = None

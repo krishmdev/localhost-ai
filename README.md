@@ -137,6 +137,8 @@ json.loads(r.choices[0].message.content)
 ```
 
 Things to know:
+- `stop` strings can't be combined with a JSON `response_format` (the request gets a 400),
+  since a stop string could end the JSON early with `finish_reason: "stop"`.
 - A response cut off by `max_tokens` (`finish_reason: "length"`) is a valid JSON prefix, not a
   complete document. Small models can repeat digits or string characters until the limit, so
   bounds in the schema (`maximum`, `maxLength`, `maxItems`) help.

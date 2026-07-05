@@ -245,7 +245,11 @@ At every sample, each constrained row's matcher writes the allowed-token bitmask
 turns it into a boolean mask over the logits and sets the rest to -inf, and after the pick the
 matcher consumes the token. Logit columns past the tokenizer's vocabulary (embedding padding)
 are never allowed. Once the grammar is complete only the EOS tokens are allowed, so the row
-ends and the scheduler finishes it with `stop`. Because the matcher advances only when a token
+ends and the scheduler finishes it with `stop`. If no EOS token fits the logits, the complete
+row is finished with `stop` without one. If the matcher fails (an error, a rejected token, or
+an empty mask mid-document), the scheduler drops that step's token and ends the row with an
+error, so a `stop` finish always parses. `stop` strings are rejected with a JSON format for the
+same reason. Because the matcher advances only when a token
 is accepted, preemption and recompute leave it in step with `generated`: the recomputed prefill
 doesn't sample the old tokens again.
 

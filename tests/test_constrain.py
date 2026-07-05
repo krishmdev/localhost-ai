@@ -301,6 +301,18 @@ async def test_sdk_rejects_a_bad_schema(json_sdk):
                              "json_schema": {"name": "x", "schema": {"type": "nope"}}})
 
 
+
+async def test_sdk_rejects_stop_with_a_json_format(json_sdk):
+    import openai
+
+    with pytest.raises(openai.BadRequestError, match="stop can't be combined"):
+        await json_sdk.chat.completions.create(
+            model="fake-json", messages=MSG, stop=["}"], response_format={"type": "json_object"})
+    r = await json_sdk.chat.completions.create(  # plain text still takes stop strings
+        model="fake-json", messages=MSG, stop=["}"], max_tokens=4,
+        response_format={"type": "text"})
+    assert r.choices[0].finish_reason in ("stop", "length")
+
 def test_models_without_grammar_support_get_a_400():
     from fakes import fake_service
     from fastapi.testclient import TestClient

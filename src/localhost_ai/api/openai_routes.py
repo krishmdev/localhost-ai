@@ -114,6 +114,9 @@ async def prepare_request(svc: Service, body: ChatCompletionRequest,
     tokenizer wrapper across that await, not the old model or engine, so a swap can free the
     old weights before loading the new ones.
     """
+    if body.stop and body.response_format is not None and body.response_format.type != "text":
+        # a stop string could cut the JSON short and still finish with "stop"
+        raise HTTPException(400, "stop can't be combined with a JSON response_format")
     if svc.swapping or svc.parts is None:
         raise HTTPException(503, "model is being replaced; retry shortly")
     generation = svc.generation
