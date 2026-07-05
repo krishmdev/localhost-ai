@@ -51,14 +51,21 @@ def sample(logits: torch.Tensor, params: list[SamplingParams],
 # the same seed. That holds when (1) the nucleus ends inside the candidates, (2) no two logits
 # in the nucleus, or at its edge, are equal (torch.sort orders ties differently from
 # torch.topk, which would put a different token at a position), and (3) no cumulative sum is
-# within TOP_P_TOL of top_p (the candidate sums round differently from the full sort's, so a
-# token right at the cut could flip). The draw then uses the very vector the full sort built:
-# the kept logits in rank order, -inf to the full vocabulary length, softmax, multinomial,
-# which also consumes the row's generator exactly as before. Rows that fail a check are sorted
-# in full. Unseeded rows have no sequence to reproduce, so they draw from the candidates
-# directly, which is the same distribution and much cheaper.
+# within top_p_tol(vocab) of top_p (the candidate sums are normalized by logsumexp, the full
+# sort's by a softmax over the sorted row, and the two round apart by more as the vocabulary
+# grows, so a token right at the cut could flip). The draw then uses the very vector the full
+# sort built: the kept logits in rank order, -inf to the full vocabulary length, softmax,
+# multinomial, which also consumes the row's generator exactly as before. Rows that fail a
+# check are sorted in full. Unseeded rows have no sequence to reproduce, so they draw from the
+# candidates directly, which is the same distribution and much cheaper.
 CANDIDATES = 256
-TOP_P_TOL = 1e-4
+
+
+def top_p_tol(vocab: int) -> float:
+    """How close a cumulative sum may come to top_p before a seeded row is sorted in full.
+    Measured drift between the two sums on fp16-valued logits (tests/test_sampling.py): up to
+    about 2e-4 at 151,936 tokens and 3.4e-4 at 262,144, so this keeps roughly 3x headroom."""
+    return max(1e-4, 4e-9 * vocab)
 
 
 def _pick(logits: torch.Tensor, params: list[SamplingParams],
@@ -85,6 +92,7 @@ def nucleus(scaled: torch.Tensor, params: list[SamplingParams],
     is already divided by the temperature. Drawing position `torch.multinomial(probs, 1)` with
     the row's generator gives the pick (see the note on CANDIDATES for seeded rows)."""
     n, vocab = scaled.shape
+    tol = top_p_tol(vocab)
     k = min(vocab, candidates)
     top_k = torch.tensor([p.top_k if 0 < p.top_k < vocab else vocab for p in params])
     top_p = torch.tensor([p.top_p for p in params])
@@ -103,7 +111,7 @@ def nucleus(scaled: torch.Tensor, params: list[SamplingParams],
     final = vals.masked_fill(mask, float("-inf")).softmax(dim=-1)
     kept = (~mask).sum(dim=-1)
     # The nucleus ends inside the candidates: top-k cuts there, or (no top-k) they carry top_p.
-    fits = cut | ((top_k == vocab) & (top_p < 1.0) & (whole.sum(dim=-1) >= top_p + TOP_P_TOL))
+    fits = cut | ((top_k == vocab) & (top_p < 1.0) & (whole.sum(dim=-1) >= top_p + tol))
     # Only for seeded rows: equal logits at positions 0..kept (the nucleus and its first
     # excluded neighbour), and cumulative sums too close to top_p to be sure of the cut.
     if len(ranked[0]) > k:
@@ -111,7 +119,7 @@ def nucleus(scaled: torch.Tensor, params: list[SamplingParams],
     else:  # the candidates are the whole vocabulary; nothing past the last one
         eq = torch.cat([ranked[:, 1:] == ranked[:, :-1], torch.zeros(n, 1, dtype=torch.bool)], 1)
     tied = (eq & (pos < kept.unsqueeze(1))).any(dim=-1)
-    near = ((cum_before - top_p.unsqueeze(1)).abs() <= TOP_P_TOL).any(dim=-1)
+    near = ((cum_before - top_p.unsqueeze(1)).abs() <= tol).any(dim=-1)
 
     out: list[tuple[torch.Tensor, torch.Tensor | None] | None] = [None] * n
     full_sort: list[int] = []

@@ -167,3 +167,41 @@ def test_seeded_sequences_match_the_old_full_sort_sampler(peak, masked, monkeypa
     by_design = 2 * steps
     if peak >= 14.0:
         assert sum(sorted_rows) - by_design < 0.25 * steps * (len(params) - 1 - 2)
+
+
+
+@pytest.mark.parametrize("vocab", [151936, 262144])  # Qwen2.5, Gemma 4
+def test_top_p_between_the_two_cumsums_at_large_vocab(vocab):
+    """The candidate path's cumulative sums (normalized by logsumexp) and the full sort's
+    (softmax over the sorted row, then cumsum) round differently, by more than 1e-4 at these
+    vocabularies. Put top_p between the two for every row, as far from the candidate sum as
+    float32 allows, and each seeded row must still draw the full sort's tokens."""
+    from localhost_ai.engine import sampling
+
+    temp, rows = 0.8, 24
+    g = torch.Generator().manual_seed(2026)
+    logits = torch.cat([lm_like(g, rows // 2, vocab, 9.0), lm_like(g, rows // 2, vocab, 12.0)])
+    scaled = logits / torch.full((rows, 1), temp)
+    # the full sort's sums, batched as old_sampler builds them
+    p = scaled.sort(dim=-1, descending=True).values.softmax(dim=-1)
+    old_cum = (p.cumsum(dim=-1) - p)[:, :200]
+    # the candidate path's sums, as nucleus builds them
+    vals = scaled.topk(200, dim=-1).values
+    w = (vals - scaled.logsumexp(dim=-1, keepdim=True)).exp()
+    new_cum = w.cumsum(dim=-1) - w
+    drift = (old_cum - new_cum).abs()
+    drift[(old_cum < 0.05) | (old_cum > 0.95)] = 0
+    worst, m = drift.max(dim=-1)
+    ar = torch.arange(rows)
+    top_p = new_cum[ar, m] + 0.99 * (old_cum[ar, m] - new_cum[ar, m])
+    between = (top_p - old_cum[ar, m]) * (top_p - new_cum[ar, m]) < 0
+    assert between.sum() >= rows // 2
+    for trial in range(4):  # a few seeds per row
+        params = [SamplingParams(temperature=temp, top_p=float(t), seed=1000 * trial + i)
+                  for i, t in enumerate(top_p)]
+        new = sample(logits, params, [make_generator(q.seed) for q in params])
+        old = old_sampler(logits, params, [make_generator(q.seed) for q in params])
+        assert new == old, [i for i in range(rows) if new[i] != old[i]]
+    print(f"vocab {vocab}: max cumsum drift {float(worst.max()):.3g}, "
+          f"tolerance {sampling.top_p_tol(vocab):.3g}")
+    assert float(worst.max()) < sampling.top_p_tol(vocab)
