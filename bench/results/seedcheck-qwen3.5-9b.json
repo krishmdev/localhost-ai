@@ -1,0 +1,552 @@
+{
+ "preset": "qwen3.5-9b-mlx4",
+ "max_tokens": 64,
+ "top_p": 0.95,
+ "cases": [
+  {
+   "temperature": 0.8,
+   "mode": "alone-repeat",
+   "width": 1,
+   "identical": 16,
+   "of": 16,
+   "diverged": [],
+   "failed": []
+  },
+  {
+   "temperature": 0.8,
+   "mode": "batched",
+   "width": 2,
+   "identical": 1,
+   "of": 2,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 7
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.8,
+   "mode": "batched-join",
+   "width": 2,
+   "identical": 2,
+   "of": 2,
+   "diverged": [],
+   "failed": []
+  },
+  {
+   "temperature": 0.8,
+   "mode": "batched",
+   "width": 8,
+   "identical": 3,
+   "of": 8,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 14
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 3,
+     "first_token_diff": 4
+    },
+    {
+     "row": 4,
+     "first_token_diff": 31
+    },
+    {
+     "row": 7,
+     "first_token_diff": 17
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.8,
+   "mode": "batched-join",
+   "width": 8,
+   "identical": 2,
+   "of": 8,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 16
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 3,
+     "first_token_diff": 33
+    },
+    {
+     "row": 4,
+     "first_token_diff": 31
+    },
+    {
+     "row": 6,
+     "first_token_diff": 15
+    },
+    {
+     "row": 7,
+     "first_token_diff": 17
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.8,
+   "mode": "batched",
+   "width": 9,
+   "identical": 3,
+   "of": 9,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 14
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 3,
+     "first_token_diff": 4
+    },
+    {
+     "row": 4,
+     "first_token_diff": 31
+    },
+    {
+     "row": 7,
+     "first_token_diff": 17
+    },
+    {
+     "row": 8,
+     "first_token_diff": 47
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.8,
+   "mode": "batched-join",
+   "width": 9,
+   "identical": 2,
+   "of": 9,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 16
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 3,
+     "first_token_diff": 33
+    },
+    {
+     "row": 4,
+     "first_token_diff": 31
+    },
+    {
+     "row": 6,
+     "first_token_diff": 15
+    },
+    {
+     "row": 7,
+     "first_token_diff": 17
+    },
+    {
+     "row": 8,
+     "first_token_diff": 47
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.8,
+   "mode": "batched",
+   "width": 16,
+   "identical": 4,
+   "of": 16,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 16
+    },
+    {
+     "row": 2,
+     "first_token_diff": 13
+    },
+    {
+     "row": 3,
+     "first_token_diff": 19
+    },
+    {
+     "row": 4,
+     "first_token_diff": 20
+    },
+    {
+     "row": 6,
+     "first_token_diff": 15
+    },
+    {
+     "row": 7,
+     "first_token_diff": 17
+    },
+    {
+     "row": 8,
+     "first_token_diff": 47
+    },
+    {
+     "row": 9,
+     "first_token_diff": 0
+    },
+    {
+     "row": 11,
+     "first_token_diff": 11
+    },
+    {
+     "row": 12,
+     "first_token_diff": 12
+    },
+    {
+     "row": 13,
+     "first_token_diff": 0
+    },
+    {
+     "row": 15,
+     "first_token_diff": 25
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.8,
+   "mode": "batched-join",
+   "width": 16,
+   "identical": 4,
+   "of": 16,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 14
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 3,
+     "first_token_diff": 4
+    },
+    {
+     "row": 4,
+     "first_token_diff": 31
+    },
+    {
+     "row": 6,
+     "first_token_diff": 15
+    },
+    {
+     "row": 7,
+     "first_token_diff": 17
+    },
+    {
+     "row": 8,
+     "first_token_diff": 47
+    },
+    {
+     "row": 10,
+     "first_token_diff": 52
+    },
+    {
+     "row": 11,
+     "first_token_diff": 40
+    },
+    {
+     "row": 12,
+     "first_token_diff": 12
+    },
+    {
+     "row": 13,
+     "first_token_diff": 0
+    },
+    {
+     "row": 15,
+     "first_token_diff": 35
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.0,
+   "mode": "alone-repeat",
+   "width": 1,
+   "identical": 16,
+   "of": 16,
+   "diverged": [],
+   "failed": []
+  },
+  {
+   "temperature": 0.0,
+   "mode": "batched",
+   "width": 2,
+   "identical": 1,
+   "of": 2,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 13
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.0,
+   "mode": "batched-join",
+   "width": 2,
+   "identical": 2,
+   "of": 2,
+   "diverged": [],
+   "failed": []
+  },
+  {
+   "temperature": 0.0,
+   "mode": "batched",
+   "width": 8,
+   "identical": 3,
+   "of": 8,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 39
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 3,
+     "first_token_diff": 23
+    },
+    {
+     "row": 6,
+     "first_token_diff": 26
+    },
+    {
+     "row": 7,
+     "first_token_diff": 48
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.0,
+   "mode": "batched-join",
+   "width": 8,
+   "identical": 4,
+   "of": 8,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 39
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 6,
+     "first_token_diff": 26
+    },
+    {
+     "row": 7,
+     "first_token_diff": 17
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.0,
+   "mode": "batched",
+   "width": 9,
+   "identical": 3,
+   "of": 9,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 39
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 3,
+     "first_token_diff": 23
+    },
+    {
+     "row": 6,
+     "first_token_diff": 26
+    },
+    {
+     "row": 7,
+     "first_token_diff": 48
+    },
+    {
+     "row": 8,
+     "first_token_diff": 56
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.0,
+   "mode": "batched-join",
+   "width": 9,
+   "identical": 5,
+   "of": 9,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 39
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 6,
+     "first_token_diff": 26
+    },
+    {
+     "row": 7,
+     "first_token_diff": 17
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.0,
+   "mode": "batched",
+   "width": 16,
+   "identical": 9,
+   "of": 16,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 39
+    },
+    {
+     "row": 2,
+     "first_token_diff": 7
+    },
+    {
+     "row": 4,
+     "first_token_diff": 20
+    },
+    {
+     "row": 7,
+     "first_token_diff": 48
+    },
+    {
+     "row": 12,
+     "first_token_diff": 20
+    },
+    {
+     "row": 13,
+     "first_token_diff": 51
+    },
+    {
+     "row": 15,
+     "first_token_diff": 49
+    }
+   ],
+   "failed": []
+  },
+  {
+   "temperature": 0.0,
+   "mode": "batched-join",
+   "width": 16,
+   "identical": 8,
+   "of": 16,
+   "diverged": [
+    {
+     "row": 1,
+     "first_token_diff": 39
+    },
+    {
+     "row": 2,
+     "first_token_diff": 23
+    },
+    {
+     "row": 3,
+     "first_token_diff": 23
+    },
+    {
+     "row": 4,
+     "first_token_diff": 20
+    },
+    {
+     "row": 7,
+     "first_token_diff": 48
+    },
+    {
+     "row": 12,
+     "first_token_diff": 20
+    },
+    {
+     "row": 13,
+     "first_token_diff": 51
+    },
+    {
+     "row": 15,
+     "first_token_diff": 49
+    }
+   ],
+   "failed": []
+  }
+ ],
+ "manifest": {
+  "recorded_at": "2026-09-27T07:16:42-0400",
+  "host": {
+   "chip": "Apple M1 Pro",
+   "ram_gb": 16.0,
+   "os": "Darwin 26.5.1",
+   "python": "3.11.13",
+   "power": "Now drawing from 'AC Power'"
+  },
+  "exclusive_compute": {
+   "held": true,
+   "holder": "localhost-ai"
+  },
+  "load": {
+   "loadavg": [
+    "2.70",
+    "4.62",
+    "5.51"
+   ],
+   "cpu_usage": "CPU usage: 14.58% user, 14.58% sys, 70.83% idle",
+   "docker_containers_running": 0,
+   "swap": "total = 2048.00M  used = 957.56M  free = 1090.44M  (encrypted)"
+  },
+  "extra": {
+   "target": "seedcheck",
+   "preset": "qwen3.5-9b-mlx4"
+  },
+  "code": {
+   "commit": "f56a728d0bba5c8386712a96dbc7f90180da2db4",
+   "branch": "main",
+   "dirty": false
+  }
+ }
+}
