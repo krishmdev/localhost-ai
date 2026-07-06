@@ -1,0 +1,88 @@
+{
+ "k": 4096,
+ "n": 12288,
+ "mats": 20,
+ "bits": 4,
+ "group_size": 64,
+ "weight_bytes": 566231040,
+ "mlx": "0.32.2",
+ "runs": [
+  {
+   "rows": 1,
+   "ms": 4.288,
+   "weight_gb_per_s": 132.0
+  },
+  {
+   "rows": 2,
+   "ms": 7.86,
+   "weight_gb_per_s": 72.0
+  },
+  {
+   "rows": 4,
+   "ms": 14.666,
+   "weight_gb_per_s": 38.6
+  },
+  {
+   "rows": 8,
+   "ms": 28.11,
+   "weight_gb_per_s": 20.1
+  },
+  {
+   "rows": 9,
+   "ms": 28.233,
+   "weight_gb_per_s": 20.1
+  },
+  {
+   "rows": 12,
+   "ms": 28.449,
+   "weight_gb_per_s": 19.9
+  },
+  {
+   "rows": 16,
+   "ms": 28.422,
+   "weight_gb_per_s": 19.9
+  },
+  {
+   "rows": 32,
+   "ms": 26.438,
+   "weight_gb_per_s": 21.4
+  },
+  {
+   "rows": 64,
+   "ms": 53.776,
+   "weight_gb_per_s": 10.5
+  }
+ ],
+ "manifest": {
+  "recorded_at": "2026-09-27T08:50:32-0400",
+  "host": {
+   "chip": "Apple M1 Pro",
+   "ram_gb": 16.0,
+   "os": "Darwin 26.5.1",
+   "python": "3.11.13",
+   "power": "Now drawing from 'AC Power'"
+  },
+  "exclusive_compute": {
+   "held": true,
+   "holder": "localhost-ai"
+  },
+  "load": {
+   "loadavg": [
+    "7.33",
+    "7.23",
+    "5.69"
+   ],
+   "cpu_usage": "CPU usage: 21.30% user, 18.93% sys, 59.76% idle",
+   "docker_containers_running": 0,
+   "swap": "total = 3072.00M  used = 1906.31M  free = 1165.69M  (encrypted)"
+  },
+  "extra": {
+   "bench": "mlx_qmm"
+  },
+  "code": {
+   "commit": "cce928c5fd985ed71421779cc61c0066cf948d5a",
+   "branch": "main",
+   "dirty": false
+  }
+ }
+}
