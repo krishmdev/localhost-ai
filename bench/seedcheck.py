@@ -24,7 +24,7 @@ from loadgen import manifest  # noqa: E402
 from localhost_ai.config import Settings  # noqa: E402
 from localhost_ai.device import configure  # noqa: E402
 from localhost_ai.engine.controller import FixedController  # noqa: E402
-from localhost_ai.engine.request import Request, SamplingParams  # noqa: E402
+from localhost_ai.engine.request import ErrorEvent, Request, SamplingParams  # noqa: E402
 from localhost_ai.engine.scheduler import Scheduler  # noqa: E402
 from localhost_ai.models.loader import load  # noqa: E402
 from localhost_ai.models.registry import Registry  # noqa: E402
@@ -32,7 +32,11 @@ from localhost_ai.models.registry import Registry  # noqa: E402
 
 def run(m, ids, params, idx, limit, join=None):
     sched = Scheduler(m.runner, m.tokenizer, FixedController(limit))
-    reqs = [Request(ids[i], params[i]) for i in idx]
+    def report(ev):
+        if isinstance(ev, ErrorEvent):
+            print(f"row error: {ev.message}", file=sys.stderr)
+
+    reqs = [Request(ids[i], params[i], on_event=report) for i in idx]
     first, late = (reqs[:join], reqs[join:]) if join else (reqs, [])
     for r in first:
         sched.add(r)
@@ -44,18 +48,24 @@ def run(m, ids, params, idx, limit, join=None):
             for r in late:
                 sched.add(r)
             late = []
-    return [(m.tokenizer.decode(r.generated), list(r.generated)) for r in reqs]
+    return [(m.tokenizer.decode(r.generated), list(r.generated), r.finish_reason) for r in reqs]
 
 
 def compare(ref, got):
-    rows = []
-    for i, ((a, at), (b, bt)) in enumerate(zip(ref, got, strict=True)):
+    """Rows whose text differs from the reference. A row that ended in an error (or with no
+    tokens) is listed under `failed` instead, since that is not a sampling difference."""
+    rows, failed = [], []
+    for i, ((a, at, af), (b, bt, bf)) in enumerate(zip(ref, got, strict=True)):
+        if "error" in (af, bf) or not at or not bt:
+            failed.append({"row": i, "finish": [af, bf], "tokens": [len(at), len(bt)]})
+            continue
         if a == b:
             continue
         k = next((j for j in range(min(len(at), len(bt))) if at[j] != bt[j]),
                  min(len(at), len(bt)))
         rows.append({"row": i, "first_token_diff": k})
-    return {"identical": len(ref) - len(rows), "of": len(ref), "diverged": rows}
+    return {"identical": len(ref) - len(rows) - len(failed), "of": len(ref) - len(failed),
+            "diverged": rows, "failed": failed}
 
 
 def main() -> None:
