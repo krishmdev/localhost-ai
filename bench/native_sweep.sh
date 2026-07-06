@@ -9,7 +9,7 @@ label=${LABEL:-$device-native}
 out=${OUT:-bench/results/$label.json}
 LHAI_DEVICE=$device uv run lhai serve --port "$port" --log-level warning &
 pid=$!
-trap 'kill $pid 2>/dev/null; wait $pid 2>/dev/null' EXIT
+trap 'kill $pid 2>/dev/null; wait $pid 2>/dev/null || true' EXIT
 uv run python bench/loadgen.py --url "http://127.0.0.1:$port" --label "$label" \
   --calibrate-slo "${SLO_FACTOR:-3}" --modes "${MODES:-fixed:1,fixed:32,aimd}" \
   --concurrency "${CONCURRENCY:-1,4,8,16,32,64}" --max-tokens "${MAX_TOKENS:-128}" \
