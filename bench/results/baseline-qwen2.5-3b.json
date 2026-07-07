@@ -1,0 +1,448 @@
+{
+ "label": "baseline-qwen2.5-3b",
+ "started": "2026-09-27T08:59:29-0400",
+ "config": {
+  "engines": [
+   "lhai-aimd",
+   "lhai-fixed",
+   "mlx_lm",
+   "llama.cpp",
+   "ollama"
+  ],
+  "concurrency": [
+   1,
+   4,
+   16
+  ],
+  "slots": 32,
+  "ctx": 2048,
+  "duration": 20.0,
+  "warmup": 5.0,
+  "settle": 3.0,
+  "max_tokens": 128,
+  "request_timeout": 300.0,
+  "prompts": "prompts.jsonl",
+  "port": 8431,
+  "seed": 0,
+  "label": "baseline-qwen2.5-3b",
+  "manifest": "/Users/krish/Developer/portfolio/.tools/run_manifest.py",
+  "note": "trimmed: concurrency 1,4,16 with 20 s windows instead of the full 1,2,4,8,16,32 sweep at 30 s",
+  "out": "bench/results/baseline-qwen2.5-3b.json"
+ },
+ "engines": [
+  {
+   "name": "lhai-aimd",
+   "version": "localhost-ai c8bf056",
+   "weights": "mlx-community/Qwen2.5-3B-Instruct-4bit (qwen2.5-3b-mlx4)",
+   "quant": "MLX 4-bit, group size 64",
+   "cmd": [
+    "uv",
+    "run",
+    "lhai",
+    "serve",
+    "--port",
+    "8431",
+    "--log-level",
+    "warning"
+   ],
+   "env": {
+    "LHAI_MODEL": "qwen2.5-3b-mlx4",
+    "LHAI_MAX_CONTEXT": "2048",
+    "LHAI_CONTROLLER": "aimd"
+   },
+   "ready_s": 3.6,
+   "loaded_footprint_bytes": 2443152432,
+   "loaded_rss_bytes": 2281930752,
+   "points": [
+    {
+     "concurrency": 1,
+     "duration_s": 20.0,
+     "completed": 15,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 54.1,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 72.8,
+     "ttft_p50_ms": 134.11,
+     "ttft_p99_ms": 270.87,
+     "tpot_p50_ms": 16.44,
+     "tpot_p99_ms": 17.67,
+     "peak_footprint_bytes": 3355987136,
+     "peak_rss_bytes": 2349629440,
+     "host_load_1m": 3.24
+    },
+    {
+     "concurrency": 4,
+     "duration_s": 20.0,
+     "completed": 19,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 81.55,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 82.1,
+     "ttft_p50_ms": 144.36,
+     "ttft_p99_ms": 545.3,
+     "tpot_p50_ms": 47.15,
+     "tpot_p99_ms": 53.8,
+     "peak_footprint_bytes": 3871771912,
+     "peak_rss_bytes": 2375892992,
+     "host_load_1m": 3.01
+    },
+    {
+     "concurrency": 16,
+     "duration_s": 20.0,
+     "completed": 27,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 139.84,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 80.9,
+     "ttft_p50_ms": 1287.92,
+     "ttft_p99_ms": 2721.34,
+     "tpot_p50_ms": 97.2,
+     "tpot_p99_ms": 133.94,
+     "peak_footprint_bytes": 9114881744,
+     "peak_rss_bytes": 2376695808,
+     "host_load_1m": 3.71
+    }
+   ]
+  },
+  {
+   "name": "lhai-fixed",
+   "version": "localhost-ai c8bf056",
+   "weights": "mlx-community/Qwen2.5-3B-Instruct-4bit (qwen2.5-3b-mlx4)",
+   "quant": "MLX 4-bit, group size 64",
+   "cmd": [
+    "uv",
+    "run",
+    "lhai",
+    "serve",
+    "--port",
+    "8432",
+    "--log-level",
+    "warning"
+   ],
+   "env": {
+    "LHAI_MODEL": "qwen2.5-3b-mlx4",
+    "LHAI_MAX_CONTEXT": "2048",
+    "LHAI_CONTROLLER": "fixed",
+    "LHAI_FIXED_BATCH": "32"
+   },
+   "ready_s": 4.5,
+   "loaded_footprint_bytes": 2445052952,
+   "loaded_rss_bytes": 2283847680,
+   "points": [
+    {
+     "concurrency": 1,
+     "duration_s": 20.0,
+     "completed": 15,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 53.5,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 72.7,
+     "ttft_p50_ms": 136.85,
+     "ttft_p99_ms": 271.19,
+     "tpot_p50_ms": 16.32,
+     "tpot_p99_ms": 17.41,
+     "peak_footprint_bytes": 3358559304,
+     "peak_rss_bytes": 2351546368,
+     "host_load_1m": 2.88
+    },
+    {
+     "concurrency": 4,
+     "duration_s": 20.0,
+     "completed": 18,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 81.49,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 87.6,
+     "ttft_p50_ms": 148.01,
+     "ttft_p99_ms": 510.99,
+     "tpot_p50_ms": 46.41,
+     "tpot_p99_ms": 51.16,
+     "peak_footprint_bytes": 4014525656,
+     "peak_rss_bytes": 2380873728,
+     "host_load_1m": 2.56
+    },
+    {
+     "concurrency": 16,
+     "duration_s": 20.0,
+     "completed": 31,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 156.6,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 76.2,
+     "ttft_p50_ms": 802.79,
+     "ttft_p99_ms": 3532.97,
+     "tpot_p50_ms": 101.26,
+     "tpot_p99_ms": 137.33,
+     "peak_footprint_bytes": 8897875904,
+     "peak_rss_bytes": 2444050432,
+     "host_load_1m": 5.45
+    }
+   ]
+  },
+  {
+   "name": "mlx_lm",
+   "version": "mlx-lm 0.31.3",
+   "weights": "mlx-community/Qwen2.5-3B-Instruct-4bit (same files)",
+   "quant": "MLX 4-bit, group size 64",
+   "cmd": [
+    "uv",
+    "run",
+    "mlx_lm.server",
+    "--model",
+    "4f83f8f146fdf28b512a06562b671d7af4fab457",
+    "--port",
+    "8433",
+    "--log-level",
+    "WARNING"
+   ],
+   "env": {},
+   "ready_s": 3.4,
+   "loaded_footprint_bytes": 2268711936,
+   "loaded_rss_bytes": 2317271040,
+   "points": [
+    {
+     "concurrency": 1,
+     "duration_s": 20.0,
+     "completed": 14,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 51.3,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 75.4,
+     "ttft_p50_ms": 215.85,
+     "ttft_p99_ms": 345.15,
+     "tpot_p50_ms": 16.14,
+     "tpot_p99_ms": 17.22,
+     "peak_footprint_bytes": 2552531968,
+     "peak_rss_bytes": 2320859136,
+     "host_load_1m": 4.42
+    },
+    {
+     "concurrency": 4,
+     "duration_s": 20.0,
+     "completed": 19,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 72.02,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 82.6,
+     "ttft_p50_ms": 570.11,
+     "ttft_p99_ms": 933.22,
+     "tpot_p50_ms": 46.33,
+     "tpot_p99_ms": 55.03,
+     "peak_footprint_bytes": 2883800160,
+     "peak_rss_bytes": 2368110592,
+     "host_load_1m": 4.28
+    },
+    {
+     "concurrency": 16,
+     "duration_s": 20.0,
+     "completed": 29,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 119.31,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 73.7,
+     "ttft_p50_ms": 1638.6,
+     "ttft_p99_ms": 3041.28,
+     "tpot_p50_ms": 122.24,
+     "tpot_p99_ms": 180.81,
+     "peak_footprint_bytes": 5197696312,
+     "peak_rss_bytes": 2549432320,
+     "host_load_1m": 5.04
+    }
+   ]
+  },
+  {
+   "name": "llama.cpp",
+   "version": "llama.cpp version: 0.5.0 (build 11146, commit 7fe450e19)",
+   "weights": "Ollama's qwen2.5:3b-instruct GGUF blob",
+   "quant": "GGUF Q4_K_M",
+   "cmd": [
+    "llama-server",
+    "-m",
+    "sha256-5ee4f07cdb9beadbbb293e85803c569b01bd37ed059d2715faa7bb405f31caa6",
+    "--port",
+    "8434",
+    "-np",
+    "32",
+    "-c",
+    "65536",
+    "-ngl",
+    "99",
+    "--jinja",
+    "--no-webui"
+   ],
+   "env": {},
+   "ready_s": 2.0,
+   "loaded_footprint_bytes": 2515554192,
+   "loaded_rss_bytes": 4486692864,
+   "points": [
+    {
+     "concurrency": 1,
+     "duration_s": 20.0,
+     "completed": 15,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 51.75,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 69.7,
+     "ttft_p50_ms": 86.4,
+     "ttft_p99_ms": 233.15,
+     "tpot_p50_ms": 17.81,
+     "tpot_p99_ms": 18.49,
+     "peak_footprint_bytes": 2582089688,
+     "peak_rss_bytes": 4553359360,
+     "host_load_1m": 3.88
+    },
+    {
+     "concurrency": 4,
+     "duration_s": 20.0,
+     "completed": 21,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 80.35,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 83.4,
+     "ttft_p50_ms": 184.46,
+     "ttft_p99_ms": 341.02,
+     "tpot_p50_ms": 46.77,
+     "tpot_p99_ms": 51.09,
+     "peak_footprint_bytes": 2670088248,
+     "peak_rss_bytes": 4641456128,
+     "host_load_1m": 2.95
+    },
+    {
+     "concurrency": 16,
+     "duration_s": 20.0,
+     "completed": 25,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 143.75,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 85.7,
+     "ttft_p50_ms": 592.1,
+     "ttft_p99_ms": 1728.37,
+     "tpot_p50_ms": 112.94,
+     "tpot_p99_ms": 132.75,
+     "peak_footprint_bytes": 2806583472,
+     "peak_rss_bytes": 4777787392,
+     "host_load_1m": 3.66
+    }
+   ]
+  },
+  {
+   "name": "ollama",
+   "version": "ollama version is 0.34.4",
+   "weights": "qwen2.5:3b-instruct",
+   "quant": "GGUF Q4_K_M",
+   "cmd": [
+    "ollama",
+    "serve"
+   ],
+   "env": {
+    "OLLAMA_HOST": "127.0.0.1:8435",
+    "OLLAMA_NUM_PARALLEL": "32",
+    "OLLAMA_CONTEXT_LENGTH": "2048",
+    "OLLAMA_KEEP_ALIVE": "-1",
+    "OLLAMA_MAX_LOADED_MODELS": "1"
+   },
+   "ready_s": 0.5,
+   "loaded_footprint_bytes": 2532659856,
+   "loaded_rss_bytes": 4546789376,
+   "points": [
+    {
+     "concurrency": 1,
+     "duration_s": 20.0,
+     "completed": 14,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 51.36,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 74.5,
+     "ttft_p50_ms": 87.96,
+     "ttft_p99_ms": 233.53,
+     "tpot_p50_ms": 17.78,
+     "tpot_p99_ms": 20.12,
+     "peak_footprint_bytes": 2602144496,
+     "peak_rss_bytes": 4616732672,
+     "host_load_1m": 5.24
+    },
+    {
+     "concurrency": 4,
+     "duration_s": 20.0,
+     "completed": 20,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 79.4,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 83.5,
+     "ttft_p50_ms": 205.59,
+     "ttft_p99_ms": 284.17,
+     "tpot_p50_ms": 47.5,
+     "tpot_p99_ms": 52.27,
+     "peak_footprint_bytes": 2685522768,
+     "peak_rss_bytes": 4700045312,
+     "host_load_1m": 5.37
+    },
+    {
+     "concurrency": 16,
+     "duration_s": 20.0,
+     "completed": 27,
+     "errors": 0,
+     "error_kinds": {},
+     "out_tok_per_s": 148.37,
+     "tokens_source": "usage",
+     "mean_completion_tokens": 81.9,
+     "ttft_p50_ms": 559.27,
+     "ttft_p99_ms": 1609.5,
+     "tpot_p50_ms": 111.61,
+     "tpot_p99_ms": 141.77,
+     "peak_footprint_bytes": 2813400008,
+     "peak_rss_bytes": 4827873280,
+     "host_load_1m": 5.99
+    }
+   ]
+  }
+ ],
+ "manifest": {
+  "recorded_at": "2026-09-27T09:08:16-0400",
+  "host": {
+   "chip": "Apple M1 Pro",
+   "ram_gb": 16.0,
+   "os": "Darwin 26.5.1",
+   "python": "3.11.13",
+   "power": "Now drawing from 'AC Power'"
+  },
+  "exclusive_compute": {
+   "held": true,
+   "holder": "localhost-ai"
+  },
+  "load": {
+   "loadavg": [
+    "5.59",
+    "4.86",
+    "4.97"
+   ],
+   "cpu_usage": "CPU usage: 6.45% user, 11.82% sys, 81.72% idle",
+   "docker_containers_running": 0,
+   "swap": "total = 3072.00M  used = 1918.00M  free = 1154.00M  (encrypted)"
+  },
+  "extra": {
+   "target": "baseline-qwen2.5-3b",
+   "engines": "lhai-aimd,lhai-fixed,mlx_lm,llama.cpp,ollama",
+   "design": "trimmed: concurrency 1,4,16 with 20 s windows instead of the full 1,2,4,8,16,32 sweep at 30 s"
+  },
+  "code": {
+   "commit": "c8bf05681a983c88176792a9375acd9916c74fde",
+   "branch": "main",
+   "dirty": false
+  }
+ }
+}
