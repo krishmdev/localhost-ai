@@ -1,0 +1,219 @@
+{
+ "preset": "qwen2.5-3b-mlx4",
+ "vocab": 151665,
+ "max_tokens": 160,
+ "schema": {
+  "type": "json_schema",
+  "json_schema": {
+   "name": "answer",
+   "strict": true,
+   "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "topic",
+     "summary",
+     "points",
+     "confidence"
+    ],
+    "properties": {
+     "topic": {
+      "type": "string"
+     },
+     "summary": {
+      "type": "string"
+     },
+     "points": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5
+     },
+     "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+     }
+    }
+   }
+  }
+ },
+ "first_constraint_s": 0.739,
+ "constraint_compile_ms": 0.4,
+ "runs": [
+  {
+   "batch": 1,
+   "constrained": false,
+   "decode_steps": 158,
+   "tokens": 160,
+   "finish": [
+    "length"
+   ],
+   "parsed": null,
+   "step_ms": 17.28,
+   "mask_ms_per_row_token": null,
+   "sample": "{\n  \"Explanation\": {\n    \"Overview\": \"A refrigerator works by maintaining a lower temperature than the surrounding environment using a refrigeration cycle. This cycle involves the compression, condensation, expansion, and evaporation of a refrigerant.\",\n    \"Components\": {\n      \"Refrigerant\": \"A su",
+   "repeat": 0
+  },
+  {
+   "batch": 1,
+   "constrained": true,
+   "decode_steps": 158,
+   "tokens": 160,
+   "finish": [
+    "length"
+   ],
+   "parsed": 0,
+   "step_ms": 17.253,
+   "mask_ms_per_row_token": 0.4758,
+   "sample": "{\n  \"topic\": \"How a Refrigerator Works\",\n  \"summary\": \"A refrigerator works by continuously removing heat from its interior and rejecting it to the external environment. Here's a breakdown of the process and key components involved in a typical refrigerator system:\",\n  \"points\": [\n    \"The refrigera",
+   "repeat": 0
+  },
+  {
+   "batch": 1,
+   "constrained": false,
+   "decode_steps": 158,
+   "tokens": 160,
+   "finish": [
+    "length"
+   ],
+   "parsed": null,
+   "step_ms": 16.164,
+   "mask_ms_per_row_token": null,
+   "sample": "{\n  \"Explanation\": {\n    \"Overview\": \"A refrigerator works by maintaining a lower temperature than the surrounding environment using a refrigeration cycle. This cycle involves the compression, condensation, expansion, and evaporation of a refrigerant.\",\n    \"Components\": {\n      \"Refrigerant\": \"A su",
+   "repeat": 1
+  },
+  {
+   "batch": 1,
+   "constrained": true,
+   "decode_steps": 158,
+   "tokens": 160,
+   "finish": [
+    "length"
+   ],
+   "parsed": 0,
+   "step_ms": 15.902,
+   "mask_ms_per_row_token": 0.3656,
+   "sample": "{\n  \"topic\": \"How a Refrigerator Works\",\n  \"summary\": \"A refrigerator works by continuously removing heat from its interior and rejecting it to the external environment. Here's a breakdown of the process and key components involved in a typical refrigerator system:\",\n  \"points\": [\n    \"The refrigera",
+   "repeat": 1
+  },
+  {
+   "batch": 8,
+   "constrained": false,
+   "decode_steps": 158,
+   "tokens": 1011,
+   "finish": [
+    "length",
+    "stop",
+    "length",
+    "stop",
+    "length",
+    "stop",
+    "length",
+    "stop"
+   ],
+   "parsed": null,
+   "step_ms": 61.319,
+   "mask_ms_per_row_token": null,
+   "sample": "{\n  \"Explanation\": {\n    \"Overview\": \"A refrigerator works by maintaining a lower temperature than the surrounding environment using a refrigeration cycle. This cycle involves the compression, condensation, expansion, and evaporation of a refrigerant.\",\n    \"Components\": {\n      \"Refrigerant\": \"A su",
+   "repeat": 0
+  },
+  {
+   "batch": 8,
+   "constrained": true,
+   "decode_steps": 158,
+   "tokens": 1159,
+   "finish": [
+    "length",
+    "length",
+    "stop",
+    "stop",
+    "length",
+    "stop",
+    "stop",
+    "length"
+   ],
+   "parsed": 4,
+   "step_ms": 73.574,
+   "mask_ms_per_row_token": 0.2326,
+   "sample": "{\n  \"topic\": \"How a Refrigerator Works\",\n  \"summary\": \"A refrigerator works by continuously removing heat from its interior and rejecting it to the external environment. Here's a breakdown of the process and key components involved in a typical refrigerator system:\",\n  \"points\": [\n    \"The refrigera",
+   "repeat": 0
+  },
+  {
+   "batch": 8,
+   "constrained": false,
+   "decode_steps": 158,
+   "tokens": 1011,
+   "finish": [
+    "length",
+    "stop",
+    "length",
+    "stop",
+    "length",
+    "stop",
+    "length",
+    "stop"
+   ],
+   "parsed": null,
+   "step_ms": 61.046,
+   "mask_ms_per_row_token": null,
+   "sample": "{\n  \"Explanation\": {\n    \"Overview\": \"A refrigerator works by maintaining a lower temperature than the surrounding environment using a refrigeration cycle. This cycle involves the compression, condensation, expansion, and evaporation of a refrigerant.\",\n    \"Components\": {\n      \"Refrigerant\": \"A su",
+   "repeat": 1
+  },
+  {
+   "batch": 8,
+   "constrained": true,
+   "decode_steps": 158,
+   "tokens": 1159,
+   "finish": [
+    "length",
+    "length",
+    "stop",
+    "stop",
+    "length",
+    "stop",
+    "stop",
+    "length"
+   ],
+   "parsed": 4,
+   "step_ms": 72.8,
+   "mask_ms_per_row_token": 0.2198,
+   "sample": "{\n  \"topic\": \"How a Refrigerator Works\",\n  \"summary\": \"A refrigerator works by continuously removing heat from its interior and rejecting it to the external environment. Here's a breakdown of the process and key components involved in a typical refrigerator system:\",\n  \"points\": [\n    \"The refrigera",
+   "repeat": 1
+  }
+ ],
+ "manifest": {
+  "recorded_at": "2026-09-27T08:59:28-0400",
+  "host": {
+   "chip": "Apple M1 Pro",
+   "ram_gb": 16.0,
+   "os": "Darwin 26.5.1",
+   "python": "3.11.13",
+   "power": "Now drawing from 'AC Power'"
+  },
+  "exclusive_compute": {
+   "held": true,
+   "holder": "localhost-ai"
+  },
+  "load": {
+   "loadavg": [
+    "3.55",
+    "5.35",
+    "5.39"
+   ],
+   "cpu_usage": "CPU usage: 4.20% user, 10.64% sys, 85.15% idle",
+   "docker_containers_running": 0,
+   "swap": "total = 2048.00M  used = 1094.69M  free = 953.31M  (encrypted)"
+  },
+  "extra": {
+   "target": "json-overhead",
+   "preset": "qwen2.5-3b-mlx4"
+  },
+  "code": {
+   "commit": "c8bf05681a983c88176792a9375acd9916c74fde",
+   "branch": "main",
+   "dirty": false
+  }
+ }
+}
