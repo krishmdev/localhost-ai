@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ..engine import thinking
 from ..engine.constrain import GrammarError
 from ..engine.engine import Handle
 from ..engine.request import DoneEvent, ErrorEvent, SamplingParams, TokenEvent
@@ -21,6 +22,7 @@ from .schemas import (
     ChatCompletionRequest,
     Choice,
     ChunkChoice,
+    CompletionTokensDetails,
     Delta,
     ModelCard,
     ModelList,
@@ -50,14 +52,25 @@ def sampling_params(body: ChatCompletionRequest, prompt_len: int, svc: Service) 
 
 
 def submit(svc: Service, messages: list[dict[str, str]], params_for,
-           constraint: object | None = None, adapter: str | None = None) -> Handle:
+           constraint: object | None = None, adapter: str | None = None,
+           template_kwargs: dict | None = None, max_thinking_tokens: int | None = None) -> Handle:
     """Shared by REST and WebSocket. Raises QueueFull / HTTPException."""
     if svc.swapping:
         raise HTTPException(503, "model is being replaced; retry shortly")
-    if svc.parts is None:
+    parts = svc.parts
+    if parts is None:
         raise HTTPException(503, "no model is loaded")
-    ids = svc.parts.encode_chat(messages)
+    if max_thinking_tokens is not None and parts.think is None:
+        raise HTTPException(400, f"max_thinking_tokens: {svc.model_name} has no thinking block")
+    try:
+        ids = (parts.encode_chat(messages, template_kwargs) if template_kwargs
+               else parts.encode_chat(messages))
+    except Exception as exc:  # a template that rejects the messages or the kwargs
+        raise HTTPException(400, f"chat template failed: {exc}") from exc
     params = params_for(len(ids))
+    constraint = thinking.wrap(parts.think, ids, {**parts.template_defaults,
+                                                  **(template_kwargs or {})},
+                               max_thinking_tokens, constraint, parts.runner.eos_ids)
     return svc.engine.submit(ids, params, constraint, adapter)
 
 
@@ -127,13 +140,16 @@ async def prepare_request(svc: Service, body: ChatCompletionRequest,
     if svc.swapping or svc.parts is None or svc.generation != generation:
         raise HTTPException(503, "model changed while preparing the request; retry shortly")
     handle = submit(svc, messages, lambda n: sampling_params(body, n, svc),
-                    constraint, adapter)
+                    constraint, adapter, body.chat_template_kwargs, body.max_thinking_tokens)
     return handle, adapter or model_name
 
 
 def usage(done: DoneEvent) -> Usage:
+    n = done.thinking_tokens
     return Usage(prompt_tokens=done.prompt_tokens, completion_tokens=done.completion_tokens,
-                 total_tokens=done.prompt_tokens + done.completion_tokens)
+                 total_tokens=done.prompt_tokens + done.completion_tokens, thinking_tokens=n,
+                 completion_tokens_details=None if n is None
+                 else CompletionTokensDetails(reasoning_tokens=n))
 
 
 def timings(done: DoneEvent) -> Timings:
@@ -183,17 +199,19 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     watcher = asyncio.create_task(watch_disconnect())
     parts: list[str] = []
+    reasoning: list[str] = []
     try:
         async for ev in handle.events():
             if isinstance(ev, TokenEvent):
-                parts.append(ev.text)
+                (reasoning if ev.reasoning else parts).append(ev.text)
             elif isinstance(ev, ErrorEvent):
                 return error(500, ev.message, "server_error", ev.code)
             elif isinstance(ev, DoneEvent):
+                thought = "".join(reasoning).strip() if ev.thinking_tokens is not None else None
+                message = AssistantMessage(content="".join(parts), reasoning_content=thought)
                 return ChatCompletion(
                     id=cid, created=created, model=served,
-                    choices=[Choice(message=AssistantMessage(content="".join(parts)),
-                                    finish_reason=ev.finish_reason)],
+                    choices=[Choice(message=message, finish_reason=ev.finish_reason)],
                     usage=usage(ev), timings=timings(ev),
                 )
     finally:
@@ -221,7 +239,8 @@ async def stream(handle: Handle, cid: str, created: int, model: str,
     # cancels the request so the batch slot is freed on the next iteration.
     async for ev in handle.events():
         if isinstance(ev, TokenEvent):
-            yield _sse(chunk(Delta(content=ev.text)))
+            yield _sse(chunk(Delta(reasoning_content=ev.text) if ev.reasoning
+                             else Delta(content=ev.text)))
         elif isinstance(ev, ErrorEvent):
             yield _sse({"error": {"message": ev.message, "type": "server_error",
                                   "code": ev.code}})

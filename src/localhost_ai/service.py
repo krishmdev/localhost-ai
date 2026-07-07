@@ -14,6 +14,7 @@ from .engine.controller import AIMDConfig, AIMDController, Controller, FixedCont
 from .engine.engine import AsyncEngine
 from .engine.prefix import PrefixCache
 from .engine.scheduler import Scheduler, SchedulerConfig
+from .engine.thinking import ThinkSpec
 from .memory import MemoryProbe
 from .metrics import EngineMetrics
 
@@ -39,6 +40,10 @@ class ModelParts:
     # the tokenizer files. None means the model can't be scored.
     chat_text: Callable[[list[dict[str, str]], dict | None], str] | None = None
     tokenizer_sha: str | None = None
+    # The preset's chat_template_kwargs (a request's own go on top), and the model's thinking
+    # markers (engine/thinking.py), None if it has none.
+    template_defaults: dict = field(default_factory=dict)
+    think: ThinkSpec | None = None
 
 
 def aimd_config(s: Settings) -> AIMDConfig:
@@ -200,6 +205,8 @@ def build_from_settings(s: Settings) -> Service:
             default_max_tokens=spec.max_new_tokens, probe=probe(spec.backend),
             grammars=Grammars.from_hf(m.tokenizer, m.runner.eos_ids), adapters=m.adapters,
             chat_text=m.chat_text, tokenizer_sha=m.tokenizer_sha,
+            template_defaults=dict(spec.chat_template_kwargs or {}),
+            think=ThinkSpec.from_tokenizer(m.tokenizer),
             info={"model": spec.name, "repo": spec.repo, "revision": spec.revision,
                   "backend": spec.backend,
                   "device": "metal" if spec.backend == "mlx" else dev.kind,

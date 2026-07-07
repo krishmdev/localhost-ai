@@ -60,12 +60,25 @@ class ChatCompletionRequest(BaseModel):
     response_format: ResponseFormat | None = None
     # extension: a loaded LoRA adapter by name (the same as sending its name as `model`)
     adapter: str | None = None
+    # extensions (as in vLLM): chat template variables on top of the preset's, e.g.
+    # {"enable_thinking": true}; and a cap on the tokens inside a thinking block, after which
+    # the block is closed and the model answers
+    chat_template_kwargs: dict | None = None
+    max_thinking_tokens: int | None = Field(None, ge=0)
+
+
+class CompletionTokensDetails(BaseModel):
+    reasoning_tokens: int
 
 
 class Usage(BaseModel):
     prompt_tokens: int
-    completion_tokens: int
+    completion_tokens: int  # includes the thinking block
     total_tokens: int
+    # requests that could think: the reasoning tokens (block markers and forced tokens not
+    # counted), also in OpenAI's completion_tokens_details
+    thinking_tokens: int | None = None
+    completion_tokens_details: CompletionTokensDetails | None = None
 
 
 class Timings(BaseModel):
@@ -80,6 +93,7 @@ class Timings(BaseModel):
 class AssistantMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
     content: str
+    reasoning_content: str | None = None  # the thinking block's text, when there was one
 
 
 class Choice(BaseModel):
@@ -101,6 +115,7 @@ class ChatCompletion(BaseModel):
 class Delta(BaseModel):
     role: Literal["assistant"] | None = None
     content: str | None = None
+    reasoning_content: str | None = None
 
 
 class ChunkChoice(BaseModel):

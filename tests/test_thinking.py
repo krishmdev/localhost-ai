@@ -6,9 +6,11 @@ import json
 
 import pytest
 import torch
-from fakes import FakeRunner
+from fakes import FakeRunner, fake_service
+from fastapi.testclient import TestClient
 from test_scheduler import Clock, drain, req
 
+from localhost_ai.api.app import create_app
 from localhost_ai.engine.controller import FixedController
 from localhost_ai.engine.request import DoneEvent, SamplingParams, TokenEvent
 from localhost_ai.engine.scheduler import Scheduler, SchedulerConfig
@@ -205,3 +207,69 @@ def test_json_response_format_applies_after_a_forced_close():
             stopped += 1
             assert isinstance(json.loads(content), dict)
     assert stopped >= 12
+
+
+# --- the API -----------------------------------------------------------------------------------
+
+def think_service(**settings):
+    seen = {}
+    svc = fake_service(ThinkRunner(t0=0.001), **settings)
+    svc.parts.tokenizer = ThinkTokenizer()
+
+    def encode_chat(messages, overrides=None):
+        seen["kwargs"] = overrides
+        on = {**svc.parts.template_defaults, **(overrides or {})}.get("enable_thinking")
+        return [3, 4, OPEN] if on else [3, 4, OPEN, CLOSE]
+
+    svc.parts.encode_chat = encode_chat
+    svc.parts.template_defaults = {"enable_thinking": False}
+    svc.parts.think = SPEC
+    svc.engine = svc._build_engine(svc.engine.controller)
+    return svc, seen
+
+
+MSG = [{"role": "user", "content": "hi"}]
+
+
+def test_api_reasoning_content_and_usage():
+    svc, seen = think_service()
+    with TestClient(create_app(svc)) as c:
+        r = c.post("/v1/chat/completions", json={
+            "messages": MSG, "max_tokens": 64, "temperature": 0,
+            "chat_template_kwargs": {"enable_thinking": True}, "max_thinking_tokens": 4})
+        off = c.post("/v1/chat/completions", json={"messages": MSG, "max_tokens": 64,
+                                                   "temperature": 0})
+    body = r.json()
+    msg = body["choices"][0]["message"]
+    assert seen["kwargs"] is None  # the last request sent none
+    assert msg["reasoning_content"] == "defg"
+    assert msg["content"] == "uvwxy"
+    assert body["usage"]["thinking_tokens"] == 4
+    assert body["usage"]["completion_tokens_details"] == {"reasoning_tokens": 4}
+    # thoughts, the forced newline and close, the blank line, the answer, EOS
+    assert body["usage"]["completion_tokens"] == 4 + 2 + 1 + 5 + 1
+    plain = off.json()
+    assert plain["choices"][0]["message"].get("reasoning_content") is None
+    assert plain["usage"].get("thinking_tokens") is None
+
+
+def test_api_streams_reasoning_as_its_own_delta():
+    svc, _ = think_service()
+    with TestClient(create_app(svc)) as c, c.stream("POST", "/v1/chat/completions", json={
+            "messages": MSG, "max_tokens": 64, "temperature": 0, "stream": True,
+            "chat_template_kwargs": {"enable_thinking": True},
+            "max_thinking_tokens": 3}) as r:
+        lines = [ln for ln in r.iter_lines() if ln.startswith("data: {")]
+    deltas = [json.loads(ln[6:])["choices"][0]["delta"] for ln in lines
+              if json.loads(ln[6:]).get("choices")]
+    thought = "".join(d.get("reasoning_content") or "" for d in deltas)
+    answer = "".join(d.get("content") or "" for d in deltas)
+    assert len(thought) == 3 and answer == "uvwxy"
+    first_answer = next(i for i, d in enumerate(deltas) if d.get("content"))
+    assert all(not d.get("reasoning_content") for d in deltas[first_answer:])
+
+
+def test_api_budget_on_a_model_without_thinking_is_400():
+    with TestClient(create_app(fake_service())) as c:
+        r = c.post("/v1/chat/completions", json={"messages": MSG, "max_thinking_tokens": 8})
+    assert r.status_code == 400

@@ -4,7 +4,7 @@
   client -> {"type": "generate", "id": "a", "messages": [...], "max_tokens": 64, ...}
             {"type": "cancel", "id": "a"}
   server -> {"type": "accepted", "id", "queue_position"}
-            {"type": "token", "id", "text", "index"}
+            {"type": "token", "id", "text", "index", "reasoning"?}  (reasoning: thinking text)
             {"type": "done", "id", "finish_reason", "usage", "timings"}
             {"type": "error", "id", "message", "code"}
 
@@ -88,8 +88,10 @@ async def ws_generate(ws: WebSocket) -> None:
         try:
             async for ev in handle.events():
                 if isinstance(ev, TokenEvent):
-                    await conn.send({"type": "token", "id": rid, "text": ev.text,
-                                     "index": ev.index})
+                    msg = {"type": "token", "id": rid, "text": ev.text, "index": ev.index}
+                    if ev.reasoning:
+                        msg["reasoning"] = True
+                    await conn.send(msg)
                 elif isinstance(ev, ErrorEvent):
                     await conn.send({"type": "error", "id": rid, "message": ev.message,
                                      "code": ev.code})
