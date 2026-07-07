@@ -1,0 +1,148 @@
+{
+ "preset": "qwen2.5-3b-mlx4",
+ "vocab": 151936,
+ "logit_rows": 855,
+ "candidates": 256,
+ "timing_setting": {
+  "temperature": 0.7,
+  "top_p": 0.95
+ },
+ "nucleus_size_p50": 1,
+ "nucleus_size_max": 64,
+ "torch_threads": 10,
+ "same_seed_mismatches": 0,
+ "same_seed_check": {
+  "t0.7-p0.95": {
+   "1": {
+    "compared_tokens": 2565,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 105
+   },
+   "8": {
+    "compared_tokens": 2544,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 102
+   },
+   "32": {
+    "compared_tokens": 2496,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 90
+   }
+  },
+  "t1.0-p0.9": {
+   "1": {
+    "compared_tokens": 2565,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 159
+   },
+   "8": {
+    "compared_tokens": 2544,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 153
+   },
+   "32": {
+    "compared_tokens": 2496,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 138
+   }
+  },
+  "t0.8-p0.95-k40": {
+   "1": {
+    "compared_tokens": 2565,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 129
+   },
+   "8": {
+    "compared_tokens": 2544,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 123
+   },
+   "32": {
+    "compared_tokens": 2496,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 108
+   }
+  },
+  "t1.0-p1.0": {
+   "1": {
+    "compared_tokens": 2565,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 2565
+   },
+   "8": {
+    "compared_tokens": 2544,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 2544
+   },
+   "32": {
+    "compared_tokens": 2496,
+    "mismatches": 0,
+    "first_mismatch": null,
+    "full_sorted_rows": 2496
+   }
+  }
+ },
+ "runs": [
+  {
+   "batch": 1,
+   "full_sort_ms": 12.049,
+   "seeded_ms": 5.21,
+   "unseeded_ms": 0.983
+  },
+  {
+   "batch": 8,
+   "full_sort_ms": 29.235,
+   "seeded_ms": 24.278,
+   "unseeded_ms": 2.47
+  },
+  {
+   "batch": 32,
+   "full_sort_ms": 113.947,
+   "seeded_ms": 79.392,
+   "unseeded_ms": 7.163
+  }
+ ],
+ "manifest": {
+  "recorded_at": "2026-09-27T08:58:02-0400",
+  "host": {
+   "chip": "Apple M1 Pro",
+   "ram_gb": 16.0,
+   "os": "Darwin 26.5.1",
+   "python": "3.11.13",
+   "power": "Now drawing from 'AC Power'"
+  },
+  "exclusive_compute": {
+   "held": true,
+   "holder": "localhost-ai"
+  },
+  "load": {
+   "loadavg": [
+    "6.91",
+    "6.17",
+    "5.65"
+   ],
+   "cpu_usage": "CPU usage: 9.81% user, 15.91% sys, 74.27% idle",
+   "docker_containers_running": 0,
+   "swap": "total = 3072.00M  used = 1338.25M  free = 1733.75M  (encrypted)"
+  },
+  "extra": {
+   "target": "sampler"
+  },
+  "code": {
+   "commit": "c8bf05681a983c88176792a9375acd9916c74fde",
+   "branch": "main",
+   "dirty": false
+  }
+ }
+}
