@@ -160,6 +160,25 @@ def _eos_from_files(path: Path, tokenizer: Any) -> frozenset[int]:
     return frozenset(ids)
 
 
+def _mlx_model_classes(config: dict) -> tuple[Any, Any]:
+    """mlx-lm's model lookup, plus `gemma4_unified` (the Gemma 4 12B conversion), which the
+    pinned mlx-lm 0.31.3 doesn't know by that name. Its language model is mlx-lm's gemma4 one,
+    weight for weight; the checkpoint only adds a `vision_embedder` that the gemma4 class
+    doesn't drop. Loading stays strict, so a text weight that didn't match would still fail."""
+    from mlx_lm.models import gemma4
+    from mlx_lm.utils import _get_classes
+
+    if config.get("model_type") != "gemma4_unified":
+        return _get_classes(config)
+
+    class Gemma4Unified(gemma4.Model):
+        def sanitize(self, weights: dict) -> dict:
+            return super().sanitize({k: v for k, v in weights.items()
+                                     if not k.startswith("vision_embedder.")})
+
+    return Gemma4Unified, gemma4.ModelArgs
+
+
 def load_mlx(spec: ModelSpec, models_dir: Path,
              adapters: list[tuple[str, str]] | None = None) -> LoadedModel:
     try:
@@ -182,7 +201,7 @@ def load_mlx(spec: ModelSpec, models_dir: Path,
         raise RuntimeError(f"{spec.name}: models.yaml says {spec.quantization}, "
                            f"the checkpoint's config.json says {quant}")
     tokenizer = AutoTokenizer.from_pretrained(path)
-    model, _ = load_model(path)
+    model, _ = load_model(path, get_model_classes=_mlx_model_classes)
     model.eval()
     # activation dtype: the most common floating dtype among the unquantized parameters
     kinds = [a.dtype for _, a in tree_flatten(model.parameters())
