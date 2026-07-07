@@ -45,6 +45,17 @@ models:
     backend: mlx
     quantization: mlx4
     max_new_tokens: 256
+  # Gemma 4 12B, the same gemma4 architecture as E4B at 6.3 GiB of 4-bit weights. On a 16 GB
+  # machine it leaves little room for KV; see the README for the batch sizes that fit. Thinking
+  # is off by default (the template then writes an empty thought channel); a request can turn
+  # it on with chat_template_kwargs and cap it with max_thinking_tokens.
+  gemma-4-12b-mlx4:
+    repo: mlx-community/gemma-4-12B-it-4bit
+    revision: 73bcf09092aa277861d5a191b989b666f7f32e8f
+    license: gemma
+    backend: mlx
+    quantization: mlx4
+    max_new_tokens: 256
   # Same model family and size as Ollama's qwen2.5:3b-instruct (Q4_K_M GGUF), for the baseline
   # comparison against other local servers in bench/RESULTS.md.
   qwen2.5-3b-mlx4:
