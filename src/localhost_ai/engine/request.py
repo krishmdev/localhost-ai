@@ -30,6 +30,7 @@ class TokenEvent:
     text: str
     token_id: int
     index: int
+    reasoning: bool = False  # text from inside a thinking block (engine/thinking.py)
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class DoneEvent:
     tpot_s: float | None
     e2e_s: float
     queue_s: float
+    thinking_tokens: int | None = None  # reasoning tokens, for requests that could think
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,7 @@ class Request:
     preemptions: int = 0
     # Set by the scheduler; opaque to everyone else.
     detok: object | None = None
+    think_detok: object | None = None  # the reasoning text's own detokenizer
     generator: object | None = None
     # response_format constraint (engine/constrain.py), built at submit time; advanced by
     # sampling, so it stays in step with `generated` across preemption and recompute.

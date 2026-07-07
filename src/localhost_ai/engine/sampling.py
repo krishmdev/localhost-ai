@@ -18,15 +18,17 @@ def make_generator(seed: int | None) -> torch.Generator:
 
 
 def constrain(logits: torch.Tensor, constraints: list | None) -> torch.Tensor:
-    """Set the logits a row's constraint (engine/constrain.py) forbids to -inf. Rows without
-    one, and batches without any, are returned untouched."""
+    """Set the logits a row's constraint (engine/constrain.py, engine/thinking.py) forbids to
+    -inf. Rows without one, or whose constraint returns None for this step, and batches without
+    any, are returned untouched."""
     if not constraints or all(c is None for c in constraints):
         return logits
     logits = logits.clone()
     width = logits.shape[-1]
     for i, c in enumerate(constraints):
-        if c is not None:
-            logits[i].masked_fill_(~c.allowed(width), float("-inf"))
+        mask = c.allowed(width) if c is not None else None
+        if mask is not None:  # None: nothing is ruled out at this step
+            logits[i].masked_fill_(~mask, float("-inf"))
     return logits
 
 

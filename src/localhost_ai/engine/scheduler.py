@@ -39,6 +39,7 @@ from .detok import Decoder, IncrementalDetokenizer
 from .request import DoneEvent, ErrorEvent, FinishReason, Request, TokenEvent
 from .runner import ModelRunner, is_oom
 from .sampling import make_generator, sample
+from .thinking import Thinking
 
 
 class QueueFull(Exception):
@@ -503,12 +504,23 @@ class Scheduler:
         if token in self.runner.eos_ids:
             self._finish(r, "stop")
             return False
-        text = r.detok.push(token)
-        if text:
-            r.on_event(TokenEvent(text=text, token_id=token, index=len(r.generated) - 1))
-        if r.detok.stopped:
-            self._finish(r, "stop")
-            return False
+        kind = c.kind if isinstance(c, Thinking) else "content"
+        if kind == "think":
+            if r.think_detok is None:
+                r.think_detok = IncrementalDetokenizer(self.tokenizer)
+            text = r.think_detok.push(token)
+            if text:
+                r.on_event(TokenEvent(text=text, token_id=token, index=len(r.generated) - 1,
+                                      reasoning=True))
+        elif kind == "marker":
+            self._flush_thinking(r)
+        else:
+            text = r.detok.push(token)
+            if text:
+                r.on_event(TokenEvent(text=text, token_id=token, index=len(r.generated) - 1))
+            if r.detok.stopped:
+                self._finish(r, "stop")
+                return False
         if r.remaining <= 0 or r.num_prompt + len(r.generated) >= self.cfg.max_context:
             self._finish(r, "length")
             return False
@@ -518,6 +530,8 @@ class Scheduler:
         if r.finish_reason is not None:
             return
         r.finish_reason = reason
+        if reason != "cancelled":
+            self._flush_thinking(r)
         if reason != "cancelled" and r.detok is not None:
             tail = r.detok.flush()
             if tail:
@@ -535,9 +549,16 @@ class Scheduler:
             tpot_s=tpot,
             e2e_s=now - r.arrival,
             queue_s=(r.admitted_at or now) - r.arrival,
+            thinking_tokens=r.constraint.tokens if isinstance(r.constraint, Thinking) else None,
         )
         self.metrics.finished(r, done)
         r.on_event(done)
+
+    def _flush_thinking(self, r: Request) -> None:
+        tail = r.think_detok.flush() if r.think_detok is not None else ""
+        if tail:
+            r.on_event(TokenEvent(text=tail, token_id=-1, index=len(r.generated) - 1,
+                                  reasoning=True))
 
     def _fail(self, r: Request, message: str) -> None:
         if r.finish_reason is not None:
