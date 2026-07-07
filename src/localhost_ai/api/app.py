@@ -10,7 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from ..service import Service
-from . import admin_routes, openai_routes, ws_routes
+from . import admin_routes, openai_routes, score_routes, ws_routes
 
 
 def create_app(svc: Service) -> FastAPI:
@@ -28,6 +28,7 @@ def create_app(svc: Service) -> FastAPI:
     if hosts and "*" not in hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
     app.include_router(openai_routes.router)
+    app.include_router(score_routes.router)
     app.include_router(ws_routes.router)
     app.include_router(admin_routes.router)
     app.mount("/metrics", make_asgi_app(registry=svc.metrics.registry))

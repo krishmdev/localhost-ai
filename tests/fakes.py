@@ -109,6 +109,52 @@ class FakeRunner:
     def padded_tokens(self, state: FakeState) -> int:
         return len(state.rows) * state.width
 
+    def logprob_rows(self, ids: list[int], rows: list[int]) -> torch.Tensor:
+        self.calls.append(("score", len(ids)))
+        return torch.log_softmax(self._logits([ids[: r + 1] for r in rows]), dim=-1)
+
+
+class PieceTokenizer:
+    """Greedy longest-match over a small vocabulary of multi-character pieces, with offsets,
+    shaped like a Hugging Face fast tokenizer call. "[1" and " [" are single pieces, so a site
+    can land inside a token."""
+
+    PIECES = [*"abcdefghijklmnopqrstuvwxyz", " ", "[", "]", "1", "2", "3", ".", ":", "[1", " [",
+              "th", "the"]
+    eos_token_id = EOS
+
+    def __call__(self, text: str, add_special_tokens: bool = False,
+                 return_offsets_mapping: bool = False) -> dict:
+        ids, offs, i = [], [], 0
+        by_len = sorted(range(len(self.PIECES)), key=lambda k: -len(self.PIECES[k]))
+        while i < len(text):
+            k = next(k for k in by_len if text.startswith(self.PIECES[k], i))
+            ids.append(k)
+            offs.append((i, i + len(self.PIECES[k])))
+            i += len(self.PIECES[k])
+        out = {"input_ids": ids}
+        if return_offsets_mapping:
+            out["offset_mapping"] = offs
+        return out
+
+    def decode(self, ids: list[int], skip_special_tokens: bool = True) -> str:
+        return "".join(self.PIECES[i] for i in ids if i < len(self.PIECES))
+
+
+def score_service(runner: FakeRunner | None = None, **settings):
+    """fake_service with a tokenizer and chat template that /v1/score can use."""
+    svc = fake_service(runner, **settings)
+    tok = PieceTokenizer()
+    svc.parts.tokenizer = tok
+    svc.parts.chat_text = lambda messages, kw=None: (
+        "".join(f"{m['role']}: {m['content']}." for m in messages)
+        + ("think" if (kw or {}).get("enable_thinking") else "") + "assistant:")
+    svc.parts.tokenizer_sha = "f" * 64
+    svc.parts.info["revision"] = "0" * 40
+    svc.commit = ("c" * 40, False)
+    svc.engine = svc._build_engine(svc.engine.controller)
+    return svc
+
 
 def reference(prompt: list[int], max_tokens: int, eos_after: int | None = None) -> list[int]:
     hist = list(prompt)

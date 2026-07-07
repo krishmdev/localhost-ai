@@ -150,3 +150,37 @@ class ControllerUpdate(BaseModel):
 
 class ModelLoad(BaseModel):
     model: str
+
+
+class ScoreSite(BaseModel):
+    char_offset: int = Field(ge=0)  # into the continuation
+    candidates: list[str] = Field(min_length=1)
+
+
+class ScoreRequest(BaseModel):
+    """POST /v1/score: log-probabilities of candidate strings at sites of a fixed continuation
+    of the assistant turn (teacher forcing, no sampling)."""
+
+    model: str | None = None
+    messages: list[ChatMessage] = Field(min_length=1)
+    continuation: str
+    sites: list[ScoreSite] = Field(min_length=1, max_length=1024)
+    chat_template_kwargs: dict | None = None
+
+
+class ScoreSiteResult(BaseModel):
+    char_offset: int
+    token_index: int
+    candidates: dict[str, float]  # log-probability of each candidate at the site
+    renorm: dict[str, float]  # the same, as probabilities renormalized over the candidates
+    forced: bool  # teacher-forced from a token start instead of read in place
+
+
+class ScoreResponse(BaseModel):
+    model: str
+    revision: str | None
+    commit: str | None
+    dirty: bool
+    tokenizer_sha: str | None
+    prompt_tokens: int  # prompt plus continuation, tokenized together
+    sites: list[ScoreSiteResult]
