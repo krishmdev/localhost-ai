@@ -82,6 +82,9 @@ class Scheduler:
         self.clock = clock
 
         self.waiting: deque[Request] = deque()
+        # Work that needs the model but isn't a generation (a /v1/score forward pass). Each job
+        # runs on the compute thread between iterations, so it never overlaps a batch step.
+        self.jobs: deque[tuple[Callable[[], None], Callable[[str], None]]] = deque()
         self.running: list[Request] = []
         self.state: Any = None
         self._lock = threading.Lock()
@@ -131,8 +134,14 @@ class Scheduler:
     def queue_depth(self) -> int:
         return len(self.waiting)
 
+    def add_job(self, run: Callable[[], None], abort: Callable[[str], None]) -> None:
+        """Queue `run` for the compute thread, before the next iteration. It reports its own
+        result and must catch its own exceptions. `abort` is called instead if the scheduler
+        fails everything (a model swap) before the job ran."""
+        self.jobs.append((run, abort))
+
     def has_work(self) -> bool:
-        return bool(self.waiting or self.running)
+        return bool(self.waiting or self.running or self.jobs)
 
     # --- compute thread --------------------------------------------------------------------
 
@@ -143,8 +152,12 @@ class Scheduler:
         self._drop_cancelled()
         if now - self._last_tick >= self.cfg.control_interval_s:
             self.tick(now)
+        ran = False
+        while self.jobs:
+            self.jobs.popleft()[0]()
+            ran = True
         if not self.running and not self.waiting:
-            return False
+            return ran
 
         t_start = self.clock()
         prefill_tokens = self._admit_and_prefill()
@@ -541,6 +554,8 @@ class Scheduler:
         for r in pending + self.running:
             self._fail(r, message)
         self.running, self.state = [], None
+        while self.jobs:
+            self.jobs.popleft()[1](message)
 
     # --- telemetry ---------------------------------------------------------------------------
 

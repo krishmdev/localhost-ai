@@ -6,17 +6,23 @@ per-request asyncio.Queue, so the compute thread never blocks on a slow client."
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 from .controller import AIMDConfig, AIMDController, Controller, FixedController
 from .request import DoneEvent, ErrorEvent, Event, Request, SamplingParams
 from .scheduler import Scheduler
 
 log = logging.getLogger("localhost_ai.engine")
+T = TypeVar("T")
+
+
+class JobAborted(RuntimeError):
+    """A queued compute-thread job was dropped before it ran (the model is being replaced)."""
 
 
 @dataclass
@@ -116,6 +122,36 @@ class AsyncEngine:
         pos = self.scheduler.add(req)  # raises QueueFull
         self._wake.set()
         return Handle(req, pos, queue, self)
+
+    async def run(self, fn: Callable[[], T]) -> T:
+        """Run `fn` on the compute thread between scheduler iterations and return its result
+        (or raise its exception) here. For model work that isn't generation, like /v1/score."""
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+
+        def settle(result: Any, exc: BaseException | None) -> None:
+            if fut.done():  # the caller went away
+                return
+            if exc is not None:
+                fut.set_exception(exc)
+            else:
+                fut.set_result(result)
+
+        def send(result: Any, exc: BaseException | None) -> None:
+            with contextlib.suppress(RuntimeError):  # the event loop is gone
+                loop.call_soon_threadsafe(settle, result, exc)
+
+        def job() -> None:
+            try:
+                result = fn()
+            except Exception as e:  # handed back to the caller
+                send(None, e)
+            else:
+                send(result, None)
+
+        self.scheduler.add_job(job, lambda msg: send(None, JobAborted(msg)))
+        self._wake.set()
+        return await fut
 
     # --- control -----------------------------------------------------------------------------
 
