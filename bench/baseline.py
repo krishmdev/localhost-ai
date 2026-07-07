@@ -384,7 +384,8 @@ async def main_async(args) -> dict:
     cfg["prompts"] = Path(args.prompts).name
     return {"label": args.label, "started": started, "config": cfg, "engines": engines,
             "manifest": manifest(args.manifest, {"target": args.label,
-                                                 "engines": ",".join(args.engines)})}
+                                                 "engines": ",".join(args.engines),
+                                                 **({"design": args.note} if args.note else {})})}
 
 
 def parse(argv: list[str] | None = None):
@@ -406,6 +407,7 @@ def parse(argv: list[str] | None = None):
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--label", default="baseline-qwen2.5-3b")
     ap.add_argument("--manifest", default=None, help="path to run_manifest.py")
+    ap.add_argument("--note", default="", help="a note on the run's design, kept in the manifest")
     ap.add_argument("--logs", default=str(HERE / "results" / "baseline-logs.tmp"))
     ap.add_argument("--out", required=True)
     return ap.parse_args(argv)
