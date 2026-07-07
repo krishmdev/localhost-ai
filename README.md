@@ -242,6 +242,14 @@ AIMD's batch limit during that run: 8 to 17.
 
 *Share of completed requests whose per-token latency (TPOT) met the SLO. It ignores time to first token, which grows with queueing when the batch is capped; that's the TTFT column. Throughput is the server's generated-token count over the measurement window.
 
+MLX 4-bit presets on the same Mac (runner-only decode, 128 greedy steps; served numbers from each preset's sweep in RESULTS.md):
+
+| preset | memory after load | decode tok/s, 1 row | decode tok/s, 16 rows | served AIMD peak |
+|---|---:|---:|---:|---|
+| qwen2.5-0.5b-mlx4 | 0.26 GiB | 158 | 881 | 153 tok/s at 32 clients, 42% within the 34.8 ms SLO |
+| gemma-4-e4b-mlx4 | 3.91 GiB | 38 | 104 | 44 tok/s at 16 clients, 11% within the 98.7 ms SLO |
+| qwen3.5-9b-mlx4 | 4.69 GiB | 26 | 64 | 23 tok/s at 4 clients, 36% within the 123.5 ms SLO |
+
 NVIDIA CUDA: not measured (no NVIDIA GPU here). The Docker CPU sweep ran on a contended host; its rough numbers are in RESULTS.md only.
 
 Memory pressure, same-session pair on the current code (CPU container capped at 1500m, 32 clients, 512 tokens each, 60 s):
@@ -253,6 +261,19 @@ Earlier pressure runs (before the guard, and an AIMD-only run) are in RESULTS.md
 <!-- results:end -->
 
 <!-- comparison:begin -->
+Against other local servers on the same Mac, Qwen2.5-3B-Instruct 4-bit (MLX 4-bit for the MLX engines, Q4_K_M GGUF for llama.cpp and Ollama), same client and prompts:
+
+| engine | tok/s, 1 client | TPOT p50, 1 client | tok/s, 16 clients | TPOT p50, 16 clients | TTFT p50, 16 clients | peak footprint |
+|---|---:|---:|---:|---:|---:|---:|
+| localhost-ai (AIMD) | 54 | 16.4 ms | 140 | 97.2 ms | 1288 ms | 8.49 GiB |
+| localhost-ai (fixed:32) | 54 | 16.3 ms | 157 | 101.3 ms | 803 ms | 8.29 GiB |
+| mlx_lm.server | 51 | 16.1 ms | 119 | 122.2 ms | 1639 ms | 4.84 GiB |
+| llama.cpp llama-server | 52 | 17.8 ms | 144 | 112.9 ms | 592 ms | 2.61 GiB |
+| Ollama | 51 | 17.8 ms | 148 | 111.6 ms | 559 ms | 2.62 GiB |
+
+The quantizations differ and the other servers cache repeated prompt prefixes by default; the full table and caveats are in RESULTS.md.
+
+`response_format` costs 0.22-0.48 ms of CPU per constrained row per token on `qwen2.5-3b-mlx4` (RESULTS.md has step times with and without it).
 <!-- comparison:end -->
 
 Grafana dashboard during the trimmed Docker CPU sweep (the batch limit steps are the sweep switching modes; AIMD held L at 16 there):
