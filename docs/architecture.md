@@ -272,6 +272,49 @@ time a model sees a constrained request. `tests/test_constrain_model.py` checks 
 with the tokenizer of every preset (SmolLM2, Qwen2.5, Llama 3.2, Gemma 4, Qwen3.5): real JSON
 tokenizations are accepted, and ordinary text can't start a JSON answer.
 
+## Thinking blocks (`engine/thinking.py`)
+
+`ThinkSpec.from_tokenizer` reads a model's thinking markers off its vocabulary, the way
+mlx-lm's tokenizer wrapper does: `<think>`/`</think>` (Qwen3.5), or Gemma 4's
+`<|channel>thought` ... `<channel|>`. A request can think when its prompt leaves a block open
+(Qwen3.5's template ends with `<think>` when thinking is on and with an empty block when it is
+off) or when its template variables have `enable_thinking` set (Gemma 4 opens the channel
+itself, as its first token). Only then does the request get a `Thinking` object, so requests
+with thinking off take the same path as before.
+
+`Thinking` takes the place of the request's constraint and has the same interface
+(`allowed`, `advance`, `complete`, `broken`), so the sampler and the scheduler need no new
+cases. It wraps the response_format constraint, if there is one. While the block is open it
+masks nothing and the inner constraint is not consulted. Once the block holds
+`max_thinking_tokens` reasoning tokens, `allowed` returns a one-hot mask for each of the forced
+tokens in turn: a newline, then the closing marker. After the block, the inner constraint masks
+the answer. With an inner constraint, EOS is masked while the block is open, so a row can't
+stop with reasoning and no JSON. If the model may open a block itself, the first step's JSON mask also allows the
+opening marker. Every `advance` labels the token as reasoning, marker or answer. The scheduler
+sends reasoning through a second detokenizer with no stop strings, drops markers (and the blank
+line after the block), and sends the answer through the usual one. `DoneEvent.thinking_tokens`
+counts reasoning tokens only. Forced tokens are one-hot at sample time, so a seeded row consumes
+its generator the same way alone or in a batch, and the state survives preemption like a JSON
+matcher's.
+
+## Scoring (`engine/score.py`)
+
+`POST /v1/score` follows Vizor's MLXScorer step for step. The route renders the chat template
+as text, and `score()` tokenizes prompt plus continuation together with offsets, maps each site
+to the first token that ends past it, and asks the runner for next-token log-probabilities at
+the rows it needs. `logprob_rows` is one forward over the whole sequence with no cache. The
+MLX runner casts only the requested rows to float32 before the log-softmax, so the bf16 logits
+of the whole sequence are the largest temporary (about 0.6 GB for 2,000 tokens of Qwen's 152k
+vocabulary). Candidates inside a token, or that span several tokens, cost one more forward each
+(two per site for the shared prefix piece). Reusing a stored prefix was left out: the
+equivalence with a plain forward is what the client checks, and a cached prefix changes the
+order of the arithmetic.
+
+The route runs `score()` through `AsyncEngine.run`, which queues a job that the scheduler runs
+at the start of its next iteration, on the compute thread. A job never overlaps a batch step
+and needs no lock on the model. A model swap fails pending jobs with a 503 instead of running
+them against the next model.
+
 ## Multi-LoRA (`engine/lora.py`)
 
 `LHAI_ADAPTERS` loads mlx-lm LoRA adapters onto the startup MLX model. `install` wraps every

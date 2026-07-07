@@ -172,6 +172,57 @@ The adapters above are the ones EduAI trains for Llama-3.2-3B-Instruct 4-bit: th
 checkpoint and the one from halfway through the same run. Requests without an adapter run the
 base layers only and give the same tokens as a server with no adapters loaded.
 
+### Thinking models
+
+Qwen3.5 and Gemma 4 can write a reasoning block before they answer. The presets keep thinking
+off. A request can turn it on with `chat_template_kwargs` (as in vLLM), which is merged over the
+preset's own template variables, and can cap the block with `max_thinking_tokens`:
+
+```python
+r = client.chat.completions.create(
+    model="qwen3.5-9b-mlx4", messages=[{"role": "user", "content": "Is 391 prime?"}],
+    max_tokens=512,
+    extra_body={"chat_template_kwargs": {"enable_thinking": True}, "max_thinking_tokens": 256})
+r.choices[0].message.reasoning_content   # the thinking block
+r.choices[0].message.content             # the answer
+r.usage.thinking_tokens                  # also in usage.completion_tokens_details
+```
+
+When the block reaches the budget, the server makes the next tokens a newline and the model's
+closing marker (`</think>` for Qwen3.5, `<channel|>` for Gemma 4's thought channel), and the
+model then writes its answer as usual. The reasoning goes back in `reasoning_content`, in
+streaming deltas too, and the markers appear in neither field. `max_tokens` still counts every
+generated token, thinking included. A JSON `response_format` constrains only the answer: the
+mask starts after the block closes, and the row can't end inside the block. Stop strings apply to the answer only. Asking for
+`max_thinking_tokens` on a model without thinking markers is a 400.
+
+### Scoring (`POST /v1/score`)
+
+`/v1/score` teacher-forces a fixed assistant answer and returns the log-probability of
+candidate strings at given character offsets of it, with no sampling. Vizor uses it to measure
+how likely the model is to cite each source at a citation site.
+
+```bash
+curl localhost:8000/v1/score -H 'content-type: application/json' -d '{
+  "messages": [{"role": "user", "content": "Sources: [1] ... [2] ... Where is the tower?"}],
+  "continuation": "It is in Paris [1].",
+  "sites": [{"char_offset": 16, "candidates": ["1", "2"]}]}'
+```
+
+The chat template is applied with the generation prompt, the continuation is appended as text
+with no end-of-turn token, and prompt plus continuation are tokenized together. Each
+`char_offset` is mapped to a token through the tokenizer's offsets. At a token start, a
+single-token candidate is read from one forward pass over the whole sequence. Inside a token,
+or for a multi-token candidate, the server backs off to the token's start and teacher-forces
+the text from there to the site, then the candidate. The response has, per site in request
+order, `token_index`, `candidates` (log-probabilities), `renorm` (the same renormalized over the
+candidates) and `forced`. It also reports `model`, `revision`, `commit` (plus `dirty`),
+`tokenizer_sha` (sha256 over the checkpoint's tokenizer files) and `prompt_tokens`. A sequence
+longer than `LHAI_MAX_CONTEXT` is a 400 with code `context_length_exceeded`; nothing is
+truncated. The forward passes run on the compute thread between scheduler iterations, so
+scoring can share a server with generation traffic. Scores are always for the base model, even
+when LoRA adapters are loaded.
+
 ## How it works
 
 The scheduler (`engine/scheduler.py`) batches at each iteration, following TGI v1. It admits
