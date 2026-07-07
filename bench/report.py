@@ -404,11 +404,21 @@ def mlx_qmm_section() -> list[str]:
             break
         lin = r["rows"]
     rest = [r for r in runs if r["rows"] > lin]
+    flat = []  # the rows right after that whose time stays within 15% of the lowest
+    for r in rest:
+        if r["ms"] > 1.15 * min(x["ms"] for x in rest):
+            break
+        flat.append(r)
+    after = ""
+    if flat:
+        after = (f"; from {flat[0]['rows']} to {flat[-1]['rows']} rows it stays at "
+                 f"{min(r['ms'] for r in flat):.0f}-{max(r['ms'] for r in flat):.0f} ms")
+        more = rest[len(flat):]
+        if more:
+            after += f", and at {more[-1]['rows']} rows it is {more[-1]['ms']:.0f} ms"
     if lin:
         out += ["", f"Up to {lin} rows the time grows about in proportion to the row count, so "
-                "each extra row costs close to another full read of the weights"
-                + (f"; past that it stays at {min(r['ms'] for r in rest):.0f}-"
-                   f"{max(r['ms'] for r in rest):.0f} ms" if rest else "")
+                "each extra row costs close to another full read of the weights" + after
                 + ". The decode step of a large preset follows the same shape in the table "
                 "above, so on this machine batching those pays off only past that point."]
     out += ["", f"Host: {host_line(q['manifest'])}", ""]

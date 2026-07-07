@@ -77,8 +77,12 @@ def baseline_section(host_line) -> list[str]:
            f"is configured for {c['slots']} parallel sequences of {c['ctx']} tokens. "
            "Everything is measured by the client: throughput counts completion tokens whose "
            "chunk arrived inside the window, TTFT is the first content chunk, TPOT is per "
-           "request. Memory is the server's process tree, sampled every 250 ms.", "",
-           "Engines and weights:", ""]
+           "request. Memory is the server's process tree, sampled every 250 ms.", ""]
+    m = d.get("manifest") or {}
+    design = m.get("design") or (m.get("extra") or {}).get("design")
+    if design:
+        out += [f"Run design: {design}.", ""]
+    out += ["Engines and weights:", ""]
     for e in d["engines"]:
         out.append(f"- {ENGINE_NAMES.get(e['name'], e['name'])}: {e['version']}, "
                    f"{e['weights']}, {e['quant']}.")
@@ -141,21 +145,37 @@ def sampler_section(host_line) -> list[str]:
     d = load("sampler")
     if not d:
         return []
+    st = d["timing_setting"]
     out = ["## Sampler CPU time", "",
            "Found while setting up the comparison above: at temperature 0.7 the sampler sorted "
            "the whole vocabulary on the CPU for every sampled row, every step. "
            "`bench/sampler_bench.py` collects real next-token logits from "
            f"`{d['preset']}` ({d['logit_rows']} rows, vocabulary {d['vocab']:,}) and times the "
            f"old full sort against the current sampler, which looks for the top-p nucleus "
-           f"among the top {d['candidates']} logits and sorts the full row only when the "
-           f"nucleus doesn't fit ({d['fallback_rows']} of {d['logit_rows']} rows needed that "
-           f"here; the median nucleus held {d['nucleus_size_p50']} tokens, the largest "
-           f"{d['nucleus_size_max']}). Both give the same distribution "
-           "(`tests/test_sampling.py`).", "",
-           "| rows sampled | full sort (ms) | candidates (ms) | speedup |", "|---:|---:|---:|---:|"]
+           f"among the top {d['candidates']} logits (the median nucleus held "
+           f"{d['nucleus_size_p50']} tokens, the largest {d['nucleus_size_max']}). Unseeded "
+           "rows draw from the candidates directly. Seeded rows rebuild the full sort's "
+           "probability vector from the candidates, so a seed gives the same tokens as before, "
+           "and fall back to the full sort when the nucleus doesn't fit, has tied logits or has "
+           "a cumulative sum too close to top_p. Timing at temperature "
+           f"{st['temperature']}, top_p {st['top_p']}:", "",
+           "| rows sampled | full sort (ms) | seeded (ms) | unseeded (ms) |",
+           "|---:|---:|---:|---:|"]
     for r in d["runs"]:
-        out.append(f"| {r['batch']} | {r['full_sort_ms']:.2f} | {r['candidates_ms']:.2f} | "
-                   f"{r['speedup']:.0f}x |")
+        out.append(f"| {r['batch']} | {r['full_sort_ms']:.2f} | {r['seeded_ms']:.2f} | "
+                   f"{r['unseeded_ms']:.2f} |")
+    out += ["", "Same-seed check: the tokens a seeded row draws, against the full sort, over "
+            "the same logits, and how many rows took the full-sort fallback:", "",
+            "| setting | rows sampled | tokens compared | mismatches | full-sort rows |",
+            "|---|---:|---:|---:|---:|"]
+    for name, by_batch in d["same_seed_check"].items():
+        for b, c in by_batch.items():
+            share = c["full_sorted_rows"] / max(1, c["compared_tokens"])
+            out.append(f"| {name} | {b} | {c['compared_tokens']} | {c['mismatches']} | "
+                       f"{c['full_sorted_rows']} ({share:.0%}) |")
+    out += ["", "With top_p 1.0 and no top-k there is no nucleus to look for, so every "
+            "seeded row is sorted in full; unseeded rows at that setting sample the softmax "
+            "directly."]
     return out + ["", f"Host: {host_line(d['manifest'])}", ""]
 
 
@@ -219,5 +239,33 @@ def readme_lines() -> list[str]:
     return out
 
 
+def seedcheck_section(host_line) -> list[str]:
+    d = load("seedcheck-qwen3.5-9b")
+    if not d:
+        return []
+    out = ["## Seeded and greedy determinism, Qwen3.5-9B 4-bit", "",
+           "`bench/seedcheck.py` runs the same prompts through the scheduler one at a time "
+           "twice, then together at each width, once with every row admitted at the start and "
+           "once with half the rows joining after four steps. A row counts as identical when "
+           f"its text matches the first solo run byte for byte ({d['max_tokens']} tokens, "
+           f"top_p {d['top_p']}, seed 1000 + row).", "",
+           "| temperature | run | rows | identical to solo |", "|---:|---|---:|---:|"]
+    names = {"alone-repeat": "solo again", "batched": "batched",
+             "batched-join": "batched, half join late"}
+    for c in d["cases"]:
+        out.append(f"| {c['temperature']:g} | {names.get(c['mode'], c['mode'])} | "
+                   f"{c['of'] if c['mode'] == 'alone-repeat' else c['width']} | "
+                   f"{c['identical']} of {c['of']} |")
+    out += ["", "Solo runs repeat exactly, seeded or greedy. Batched rows do not, from two "
+            "rows up. The two-row run where the second row joined late, so each row was "
+            "prefilled alone, stayed identical, which points at the padded multi-row prefill; "
+            "the 4-bit matmul also changes kernels with the row count (above). Once one token "
+            "differs, the rest of the text follows it. Where byte-identical output matters, "
+            "send requests one at a time or run the server with a fixed batch of 1.", "",
+            f"Host: {host_line(d['manifest'])}", ""]
+    return out
+
+
 def sections(host_line) -> list[str]:
-    return baseline_section(host_line) + sampler_section(host_line) + json_section(host_line)
+    return (baseline_section(host_line) + sampler_section(host_line) + json_section(host_line)
+            + seedcheck_section(host_line))
