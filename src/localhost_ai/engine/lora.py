@@ -215,6 +215,10 @@ class LoRAMLXRunner(MLXModelRunner):
         state.slots = slots
         return state, logits
 
+    def logprob_rows(self, ids: list[int], rows: list[int]):
+        self.adapters.use([0])  # scoring runs the base model
+        return super().logprob_rows(ids, rows)
+
     def decode(self, state: Any, tokens: list[int]):
         self.adapters.use(_slots(state))
         return super().decode(state, tokens)

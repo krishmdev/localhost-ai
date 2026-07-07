@@ -225,6 +225,17 @@ class MLXModelRunner:
             c.filter(idx)
         return MLXBatch(state.cache, [state.lengths[i] for i in keep])
 
+    def logprob_rows(self, ids: list[int], rows: list[int]) -> torch.Tensor:
+        """Next-token log-probabilities after each of `rows` of one sequence, from one forward
+        pass with no cache (for /v1/score). The logits of the whole sequence come out of the
+        model; only the requested rows are cast to float32 and normalized."""
+        logits = self.model(mx.array([ids], dtype=mx.int32))[0]
+        sel = logits[mx.array(rows, dtype=mx.int32)].astype(mx.float32)
+        out = sel - mx.logsumexp(sel, axis=-1, keepdims=True)
+        mx.eval(out)
+        del logits
+        return torch.from_numpy(np.array(out))
+
     def row_bytes(self, tokens: int) -> int:
         """What one row of a batch padded to `tokens` holds: full-attention KV for every token,
         sliding-window KV for at most the window, both rounded up to mlx-lm's allocation step

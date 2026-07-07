@@ -374,3 +374,18 @@ def test_prefix_cache_budget_and_drop(runner):
     r2 = MLXModelRunner(runner.model, eos_ids=frozenset({0}), prefix_cache=small)
     r2.prefill([SYSTEM + s for s in SUFFIXES[:2]])
     assert not small.entries and small.misses == 2
+
+
+@pytest.mark.parametrize("name", ["llama", "hybrid", "windowed"])
+def test_logprob_rows_matches_a_plain_forward(request, name):
+    """/v1/score's forward: the rows asked for, log-softmaxed, equal the model's own full
+    forward (no cache) at the same positions, for plain, recurrent and sliding-window layers."""
+    r = request.getfixturevalue({"llama": "runner", "hybrid": "hybrid",
+                                 "windowed": "windowed"}[name])
+    ids = PROMPTS[0] + FORCED[0] + PROMPTS[3]
+    rows = [0, 5, len(ids) - 1]
+    logits = r.model(mx.array([ids], dtype=mx.int32))[0].astype(mx.float32)
+    ref = torch.from_numpy(np.array(logits - mx.logsumexp(logits, axis=-1, keepdims=True)))
+    got = r.logprob_rows(ids, rows)
+    assert got.dtype == torch.float32 and got.shape == (3, ref.shape[1])
+    assert torch.allclose(got, ref[rows], atol=1e-5)

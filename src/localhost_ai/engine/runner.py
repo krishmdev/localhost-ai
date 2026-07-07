@@ -128,6 +128,13 @@ class HFModelRunner:
         state.mask = mask
         return out.logits[:, -1, :]
 
+    @torch.inference_mode()
+    def logprob_rows(self, ids: list[int], rows: list[int]) -> torch.Tensor:
+        """Next-token log-probabilities after each of `rows` of one sequence (for /v1/score)."""
+        x = torch.tensor([ids], dtype=torch.long, device=self.device)
+        logits = self.model(input_ids=x, use_cache=False).logits[0, rows].float()
+        return torch.log_softmax(logits, dim=-1).cpu()
+
     def merge(self, a: HFBatch, b: HFBatch) -> HFBatch:
         cache, mask = kv.merge(a.cache, a.mask, b.cache, b.mask)
         return HFBatch(cache, mask)
