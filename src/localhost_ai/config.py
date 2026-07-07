@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     # mlx-lm adapter directory or one .safetensors checkpoint inside one.
     adapters: str = ""
 
+    # The server build /v1/score reports. Empty: read it from git at startup (a checkout);
+    # set it where there is no .git, e.g. in the container image.
+    commit: str = ""
+
     admin_token: str = ""
     # Host headers the server answers to (DNS-rebinding guard), comma-separated; "server" is
     # the compose service name Prometheus scrapes, "testserver" is Starlette's test client.
@@ -77,6 +81,27 @@ def parse_adapters(value: str) -> list[tuple[str, str]]:
     if len(set(names)) != len(names):
         raise ValueError(f"adapter names must be unique: {names}")
     return out
+
+
+def code_commit(s: Settings) -> tuple[str | None, bool]:
+    """(commit, dirty) of the running code: LHAI_COMMIT if set, else the git checkout's HEAD
+    and whether tracked files differ from it. (None, False) outside a checkout."""
+    if s.commit:
+        return s.commit, False
+    import subprocess
+
+    def git(*args: str) -> str | None:
+        try:
+            out = subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True,
+                                 timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return out.stdout.strip() if out.returncode == 0 else None
+
+    head = git("rev-parse", "HEAD")
+    if not head:
+        return None, False
+    return head, bool(git("status", "--porcelain", "--untracked-files=no"))
 
 
 @lru_cache

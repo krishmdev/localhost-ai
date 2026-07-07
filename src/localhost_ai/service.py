@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .config import Settings, parse_adapters
+from .config import Settings, code_commit, parse_adapters
 from .engine.constrain import Grammars
 from .engine.controller import AIMDConfig, AIMDController, Controller, FixedController
 from .engine.engine import AsyncEngine
@@ -35,6 +35,10 @@ class ModelParts:
     # the model can't do constrained decoding and such requests get a 400.
     grammars: Any = None
     adapters: list[str] = field(default_factory=list)  # LoRA adapters requests can pick
+    # /v1/score: the templated prompt as text (messages, template overrides), and the digest of
+    # the tokenizer files. None means the model can't be scored.
+    chat_text: Callable[[list[dict[str, str]], dict | None], str] | None = None
+    tokenizer_sha: str | None = None
 
 
 def aimd_config(s: Settings) -> AIMDConfig:
@@ -62,6 +66,8 @@ class Service:
     engine: AsyncEngine = field(init=False)
     swapping: bool = False
     generation: int = field(default=0, init=False)
+    # the code build, reported by /v1/score: (commit, dirty)
+    commit: tuple[str | None, bool] = (None, False)
     _swap_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -193,6 +199,7 @@ def build_from_settings(s: Settings) -> Service:
             name=spec.name, runner=m.runner, tokenizer=m.tokenizer, encode_chat=m.encode_chat,
             default_max_tokens=spec.max_new_tokens, probe=probe(spec.backend),
             grammars=Grammars.from_hf(m.tokenizer, m.runner.eos_ids), adapters=m.adapters,
+            chat_text=m.chat_text, tokenizer_sha=m.tokenizer_sha,
             info={"model": spec.name, "repo": spec.repo, "revision": spec.revision,
                   "backend": spec.backend,
                   "device": "metal" if spec.backend == "mlx" else dev.kind,
@@ -205,4 +212,4 @@ def build_from_settings(s: Settings) -> Service:
 
     parts = loader(s.model)
     return Service(settings=s, parts=parts, probe=parts.probe, metrics=EngineMetrics(),
-                   model_names=list(registry.specs), loader=loader)
+                   model_names=list(registry.specs), loader=loader, commit=code_commit(s))

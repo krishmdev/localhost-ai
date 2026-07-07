@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -31,13 +32,41 @@ class LoadedModel:
     def dtype_name(self) -> str:
         return str(self.dtype).removeprefix("torch.").removeprefix("mlx.core.")
 
-    def encode_chat(self, messages: list[dict[str, str]]) -> list[int]:
+    def template_kwargs(self, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+        """The preset's chat_template_kwargs with a request's own on top."""
+        return {**(self.spec.chat_template_kwargs or {}), **(overrides or {})}
+
+    def encode_chat(self, messages: list[dict[str, str]],
+                    overrides: dict[str, Any] | None = None) -> list[int]:
         out = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True,
                                                  tokenize=True,
-                                                 **(self.spec.chat_template_kwargs or {}))
+                                                 **self.template_kwargs(overrides))
         if isinstance(out, dict) or hasattr(out, "input_ids"):
             out = out["input_ids"]
         return list(out)
+
+    def chat_text(self, messages: list[dict[str, str]],
+                  overrides: dict[str, Any] | None = None) -> str:
+        """The templated prompt as text, ending with the generation prompt."""
+        return self.tokenizer.apply_chat_template(messages, add_generation_prompt=True,
+                                                  tokenize=False,
+                                                  **self.template_kwargs(overrides))
+
+    @property
+    def tokenizer_sha(self) -> str:
+        """sha256 over the checkpoint's tokenizer* files (name, then bytes, in name order), the
+        same digest Vizor's MLXScorer computes, so a client can tell tokenizers apart."""
+        return files_sha(f for f in self.path.glob("tokenizer*") if f.is_file())
+
+
+def files_sha(files: Any) -> str:
+    h = hashlib.sha256()
+    for f in sorted(files):
+        h.update(f.name.encode())
+        with open(f, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    return h.hexdigest()
 
 
 def _eos_ids(tokenizer: Any, model: Any) -> frozenset[int]:
