@@ -126,7 +126,27 @@ def test_foreign_origin_rejected_without_token():
                                     headers={"origin": "https://evil.example"}) as ws:
             ws.receive_json()
         with c.websocket_connect("/v1/ws/telemetry",
+                                 headers={"origin": "http://testserver"}) as ws:
+            assert ws.receive_json()["type"] == "telemetry"
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:3000", "http://testserver:8080",
+                                    "https://testserver", "null", "http://[::1"])
+def test_same_host_on_another_port_or_scheme_is_another_origin(origin):
+    with TestClient(create_app(fake_service())) as c, pytest.raises(WebSocketDisconnect), \
+            c.websocket_connect("/v1/ws/telemetry", headers={"origin": origin}) as ws:
+        ws.receive_json()
+
+
+def test_listed_origins_are_allowed():
+    svc = fake_service(allowed_origins="http://localhost:3000/")
+    with TestClient(create_app(svc)) as c:
+        with c.websocket_connect("/v1/ws/telemetry",
                                  headers={"origin": "http://localhost:3000"}) as ws:
+            assert ws.receive_json()["type"] == "telemetry"
+        with c.websocket_connect("/v1/ws/telemetry",
+                                 headers={"origin": "http://testserver:80",
+                                          "host": "testserver"}) as ws:
             assert ws.receive_json()["type"] == "telemetry"
 
 

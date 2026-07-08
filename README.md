@@ -119,8 +119,10 @@ uv run python scripts/ws_top.py --url ws://127.0.0.1:8000 --set-slo 60
 Security:
 - The server only answers requests whose `Host` header is in `LHAI_ALLOWED_HOSTS` (localhost
   names and the compose service name by default). This blocks DNS-rebinding pages.
-- WebSocket handshakes from a browser must come from one of those hosts, with or without a
-  token. Non-browser clients send no `Origin` header and are allowed.
+- WebSocket handshakes from a browser must come from a page this server served (same host
+  and port), or from an origin listed in `LHAI_ALLOWED_ORIGINS`, with or without a token. A
+  page on another localhost port counts as another origin. Non-browser clients send no
+  `Origin` header and are allowed.
 - REST routes send no CORS headers, so other sites can't call them from a browser.
 - The admin token guards admin routes and the telemetry controls. Generation is open to anyone
   who can reach the port.
@@ -358,7 +360,7 @@ Environment variables, prefix `LHAI_` (see `src/localhost_ai/config.py`):
 - `MAX_QUEUE` (256), `MAX_PREFILL_TOKENS_PER_STEP` (2048), `MAX_CONTEXT` (2048).
 - `PREFIX_CACHE` (off), `PREFIX_CACHE_MB` (512), `PREFIX_MIN_TOKENS` (32): reuse the prefill
   of a prompt prefix that recent requests share, such as a long system prompt.
-- `ADMIN_TOKEN`, `ALLOWED_HOSTS`.
+- `ADMIN_TOKEN`, `ALLOWED_HOSTS`, `ALLOWED_ORIGINS`.
 - `MEM_LIMIT_BYTES`: pretend-budget for native runs.
 - `ADAPTERS`: LoRA adapters for the startup model (MLX presets), `name=path,name2=path2`.
 

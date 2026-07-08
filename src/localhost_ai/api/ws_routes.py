@@ -43,13 +43,38 @@ router = APIRouter()
 
 def origin_ok(svc: Service, ws: WebSocket) -> bool:
     """Browsers send an Origin header on WebSocket handshakes and CORS doesn't apply to them, so
-    a web page could otherwise drive this server. Only non-browser clients (no Origin) and pages
-    served from an allowed host are accepted, whether or not an admin token is set."""
+    a web page could otherwise drive this server. Only non-browser clients (no Origin), pages
+    served by this server itself (the Origin's host and port equal the handshake's Host, which
+    TrustedHost has already checked) and the full origins listed in LHAI_ALLOWED_ORIGINS are
+    accepted, whether or not an admin token is set. Another port on localhost is a different
+    origin, so a page from some other local server is refused unless it is listed."""
     origin = ws.headers.get("origin")
     if not origin:
         return True
-    allowed = {h.strip().strip("[]") for h in svc.settings.allowed_hosts.split(",") if h.strip()}
-    return "*" in allowed or (urlsplit(origin).hostname or "") in allowed
+    listed = {o.strip().rstrip("/").lower() for o in svc.settings.allowed_origins.split(",")
+              if o.strip()}
+    if "*" in listed or origin.rstrip("/").lower() in listed:
+        return True
+    own = _host_port(ws.headers.get("host", ""), ws.url.scheme == "wss")
+    try:
+        u = urlsplit(origin)
+        theirs = _host_port(u.netloc, u.scheme == "https") if u.scheme in ("http", "https") \
+            else None
+    except ValueError:
+        return False
+    return own is not None and theirs == own
+
+
+def _host_port(netloc: str, secure: bool) -> tuple[str, int] | None:
+    """(host, port) of a Host header or an origin's netloc, with the scheme's default port."""
+    try:
+        h = urlsplit(f"//{netloc}")
+        port = h.port
+    except ValueError:
+        return None
+    if not h.hostname:
+        return None
+    return h.hostname.lower(), port or (443 if secure else 80)
 
 
 def token_ok(svc: Service, supplied: str | None) -> bool:
