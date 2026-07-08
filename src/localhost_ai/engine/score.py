@@ -12,7 +12,8 @@ char_offset (into the continuation) is mapped to a token through the tokenizer's
   teacher-force the text from there, log P(piece + candidate | head) - log P(piece | head).
 
 This follows a reference scorer that calls mlx-lm directly, step for step, so the two agree to
-float rounding. The sequence is never truncated: if it (or a forced tail) doesn't fit the context, the request is rejected.
+float rounding. The sequence is never truncated: if it (or a forced tail) doesn't fit the
+context, the request is rejected.
 
 Every teacher-forced candidate costs a full forward pass, and the passes run on the compute
 thread between generation steps, so a request is bounded before any of them runs: at most
