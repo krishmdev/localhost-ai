@@ -1,0 +1,134 @@
+{
+ "gemma-4-12b-mlx4": {
+  "preset": "gemma-4-12b-mlx4",
+  "repo": "mlx-community/gemma-4-12B-it-4bit",
+  "revision": "73bcf09092aa277861d5a191b989b666f7f32e8f",
+  "quant": "mlx4",
+  "dtype": "bfloat16",
+  "kv_bytes_per_token": 344064,
+  "row_state_bytes": 0,
+  "metal_recommended_working_set_gib": 11.84,
+  "probe_before_load": {
+   "used_gib": 0.0,
+   "limit_gib": 10.454
+  },
+  "probe_after_load": {
+   "used_gib": 6.241,
+   "limit_gib": 8.862,
+   "headroom_frac": 0.296
+  },
+  "load": {
+   "load_s": 4.25,
+   "active_gib": 6.241,
+   "peak_gib": 6.455,
+   "cache_gib": 0.0
+  },
+  "answer": "Paris",
+  "runs": [
+   {
+    "batch": 1,
+    "prompt_tokens": [
+     17
+    ],
+    "prefill_s": 0.381,
+    "decode_steps": 64,
+    "decode_s": 3.692,
+    "decode_step_ms": 57.69,
+    "decode_tok_per_s": 17.3,
+    "sample": "Three",
+    "active_gib": 6.328,
+    "peak_gib": 6.362,
+    "cache_gib": 0.292
+   },
+   {
+    "batch": 2,
+    "prompt_tokens": [
+     17,
+     27
+    ],
+    "prefill_s": 0.726,
+    "decode_steps": 64,
+    "decode_s": 6.655,
+    "decode_step_ms": 103.98,
+    "decode_tok_per_s": 19.2,
+    "sample": "Three",
+    "active_gib": 6.421,
+    "peak_gib": 6.475,
+    "cache_gib": 0.236
+   },
+   {
+    "batch": 4,
+    "prompt_tokens": [
+     17,
+     27,
+     114,
+     21
+    ],
+    "prefill_s": 4.473,
+    "decode_steps": 64,
+    "decode_s": 12.884,
+    "decode_step_ms": 201.32,
+    "decode_tok_per_s": 19.9,
+    "sample": "Three",
+    "active_gib": 6.707,
+    "peak_gib": 6.934,
+    "cache_gib": 0.853
+   },
+   {
+    "batch": 8,
+    "prompt_tokens": [
+     17,
+     27,
+     114,
+     21,
+     26,
+     69,
+     19,
+     28
+    ],
+    "prefill_s": 8.485,
+    "decode_steps": 64,
+    "decode_s": 23.009,
+    "decode_step_ms": 359.52,
+    "decode_tok_per_s": 22.3,
+    "sample": "Three",
+    "active_gib": 7.173,
+    "peak_gib": 7.487,
+    "cache_gib": 1.144
+   }
+  ],
+  "manifest": {
+   "recorded_at": "2026-09-27T09:23:31-0400",
+   "host": {
+    "chip": "Apple M1 Pro",
+    "ram_gb": 16.0,
+    "os": "Darwin 26.5.1",
+    "python": "3.11.13",
+    "power": "Now drawing from 'AC Power'"
+   },
+   "exclusive_compute": {
+    "held": true,
+    "holder": "localhost-ai"
+   },
+   "load": {
+    "loadavg": [
+     "1.58",
+     "3.38",
+     "4.28"
+    ],
+    "cpu_usage": "CPU usage: 3.4% user, 9.97% sys, 86.98% idle",
+    "docker_containers_running": 0,
+    "swap": "total = 4096.00M  used = 2962.00M  free = 1134.00M  (encrypted)"
+   },
+   "extra": {
+    "bench": "mlx_direct",
+    "preset": "gemma-4-12b-mlx4"
+   },
+   "code": {
+    "commit": "0860ef6198a57e097f733fefa1d812f1f67f44f6",
+    "branch": "main",
+    "dirty": false
+   }
+  }
+ }
+}
