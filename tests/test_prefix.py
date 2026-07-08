@@ -1,7 +1,9 @@
 """PrefixCache bookkeeping, backend-free: lookup, when a new prefix is proposed, LRU eviction
-under the entry and byte budgets."""
+under the entry and byte budgets, and not rebuilding a prefix too big for the budget."""
 
-from localhost_ai.engine.prefix import PrefixCache, common_prefix
+import torch
+
+from localhost_ai.engine.prefix import PrefixCache, common_prefix, prefill_with_prefixes
 
 SYS = list(range(100, 140))  # 40 shared tokens
 
@@ -62,3 +64,23 @@ def test_stats():
     st = pc.stats()
     assert st["prefix_entries"] == 1 and st["prefix_bytes"] == 40
     assert st["prefix_hits"] == 1 and st["prefix_hit_tokens"] == 5
+
+
+def test_a_prefix_over_the_budget_is_built_once_then_not_proposed_again():
+    class Runner:
+        builds = 0
+
+        def _build_prefix(self, tokens):
+            Runner.builds += 1
+            return "state", 10 * len(tokens)  # 400 bytes for 40 tokens
+
+        def _prefill(self, seqs, entry):
+            return "batch", torch.zeros(len(seqs), 4)
+
+    pc = PrefixCache(budget_bytes=100, min_tokens=8)
+    system = list(range(100, 140))
+    for i in range(6):
+        prefill_with_prefixes(Runner(), pc, [system + [i, i + 1]])
+    assert Runner.builds == 1 and not pc.entries and pc.too_big == 40
+    # a shorter shared prefix, which may fit, is still proposed
+    assert pc.propose(system[:8] + [7, 7]) == 8

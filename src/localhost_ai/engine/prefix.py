@@ -53,6 +53,10 @@ class PrefixCache:
         self.misses = 0
         self.hit_tokens = 0
         self.evictions = 0
+        # Shortest prefix length whose state came out over budget_bytes. Longer prefixes can
+        # only be bigger, so propose() stops offering them instead of building and discarding
+        # one on every request.
+        self.too_big: int | None = None
 
     @property
     def nbytes(self) -> int:
@@ -76,10 +80,13 @@ class PrefixCache:
         best = min(best, len(seq) - 1)
         if best < self.min_tokens or (have and best < have + max(16, have // 4)):
             return 0
+        if self.too_big is not None and best >= self.too_big:
+            return 0
         return best
 
     def add(self, tokens: list[int], state: Any, nbytes: int) -> PrefixEntry | None:
         if nbytes > self.budget_bytes:
+            self.too_big = min(len(tokens), self.too_big or len(tokens))
             return None
         e = PrefixEntry(tuple(tokens), state, nbytes)
         self.entries[e.tokens] = e
