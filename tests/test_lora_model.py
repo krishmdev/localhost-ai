@@ -1,12 +1,12 @@
-"""Multi-LoRA on the real Llama-3.2-3B-Instruct 4-bit with EduAI's adapters, against mlx-lm.
+"""Multi-LoRA on the real Llama-3.2-3B-Instruct 4-bit with trained adapters, against mlx-lm.
 
-Two adapters from the EduAI training run are served at once: the final one (600 iterations)
+Two adapters from one training run are served at once: the final one (600 iterations)
 and its 300-iteration checkpoint. Every prompt is sent three times in one mixed batch (base,
 each adapter), and each row's greedy tokens must equal mlx-lm's `stream_generate` on a model
-loaded with that adapter (or none). Needs the mlx extra, the llama-3.2-3b-mlx4 weights and the
-EduAI adapters; skips otherwise.
+loaded with that adapter (or none). Needs the mlx extra, the llama-3.2-3b-mlx4 weights and an
+adapter directory with a 300-iteration checkpoint in it; skips otherwise.
 
-    LHAI_EDUAI_ADAPTER=/path/to/eduai/adapters/llama32-3b-eduai uv run pytest -q -m mlx_model \
+    LHAI_LORA_ADAPTER=/path/to/adapters uv run pytest -q -m mlx_model \
         tests/test_lora_model.py"""
 
 import os
@@ -25,8 +25,7 @@ N_TOKENS = 24
 PROMPTS = ["What gas do plants take in from the air during photosynthesis?",
            "Why does ice float on water?",
            "Name the organelle that makes ATP in a cell."]
-ADAPTER_DIR = Path(os.environ.get("LHAI_EDUAI_ADAPTER",
-                                  REPO_ROOT.parent / "eduai/adapters/llama32-3b-eduai"))
+ADAPTER_DIR = Path(os.environ.get("LHAI_LORA_ADAPTER", REPO_ROOT / "adapters"))
 CHECKPOINT = "0000300_adapters.safetensors"
 
 
@@ -41,12 +40,12 @@ def paths(tmp_path_factory):
     except Exception as exc:  # noqa: BLE001
         pytest.skip(f"llama-3.2-3b-mlx4 not downloaded ({exc})")
     if not (ADAPTER_DIR / "adapters.safetensors").exists():
-        pytest.skip(f"EduAI adapters not found at {ADAPTER_DIR}")
+        pytest.skip(f"no LoRA adapters at {ADAPTER_DIR} (set LHAI_LORA_ADAPTER)")
     # mlx-lm loads `adapters.safetensors` from a directory, so give the checkpoint one
-    ckpt = tmp_path_factory.mktemp("eduai-300")
+    ckpt = tmp_path_factory.mktemp("tutor-300")
     (ckpt / "adapters.safetensors").symlink_to(ADAPTER_DIR / CHECKPOINT)
     (ckpt / "adapter_config.json").symlink_to(ADAPTER_DIR / "adapter_config.json")
-    return {"base": base, "eduai": ADAPTER_DIR, "eduai-300": ckpt}
+    return {"base": base, "tutor": ADAPTER_DIR, "tutor-300": ckpt}
 
 
 def mlx_lm_tokens(base: Path, adapter: Path | None) -> list[list[int]]:
@@ -67,7 +66,7 @@ def mlx_lm_tokens(base: Path, adapter: Path | None) -> list[list[int]]:
 @pytest.fixture(scope="module")
 def reference(paths):
     return {name: mlx_lm_tokens(paths["base"], None if name == "base" else paths[name])
-            for name in ("base", "eduai", "eduai-300")}
+            for name in ("base", "tutor", "tutor-300")}
 
 
 @pytest.fixture(scope="module")
@@ -81,8 +80,8 @@ def served(paths, reference):  # after the references, so only one model is load
     s = get_settings()
     dev = DeviceConfig(torch.device("cpu"), torch.float32, threads=torch.get_num_threads())
     return load(Registry(s.models_file).get("llama-3.2-3b-mlx4"), dev, s.models_dir,
-                adapters=[("eduai", str(ADAPTER_DIR)),
-                          ("eduai-300", str(ADAPTER_DIR / CHECKPOINT))])
+                adapters=[("tutor", str(ADAPTER_DIR)),
+                          ("tutor-300", str(ADAPTER_DIR / CHECKPOINT))])
 
 
 def run(m, route, limit):
@@ -100,12 +99,12 @@ def run(m, route, limit):
 
 
 def test_adapters_change_the_answers(reference):
-    assert reference["eduai"] != reference["base"]
-    assert reference["eduai"] != reference["eduai-300"]
+    assert reference["tutor"] != reference["base"]
+    assert reference["tutor"] != reference["tutor-300"]
 
 
 def test_mixed_batch_matches_mlx_lm_per_adapter(served, reference):
-    route = [None, "eduai", "eduai-300"]
+    route = [None, "tutor", "tutor-300"]
     reqs = run(served, route, limit=len(route) * len(PROMPTS))
     for i, r in enumerate(reqs):
         name = route[i % len(route)] or "base"
@@ -116,7 +115,7 @@ def test_mixed_batch_matches_mlx_lm_per_adapter(served, reference):
 
 
 def test_single_adapter_batches_match_mlx_lm(served, reference):
-    for name in ("eduai", "eduai-300"):
+    for name in ("tutor", "tutor-300"):
         reqs = run(served, [name], limit=len(PROMPTS))
         for i, r in enumerate(reqs):
             assert r.generated == reference[name][i], name

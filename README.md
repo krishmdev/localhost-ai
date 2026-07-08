@@ -155,7 +155,6 @@ Things to know:
 - A response cut off by `max_tokens` (`finish_reason: "length"`) is a valid JSON prefix, not a
   complete document. Small models can repeat digits or string characters until the limit, so
   bounds in the schema (`maximum`, `maxLength`, `maxItems`) help.
-- Stop sequences still apply and can end the output early.
 - The first constrained request on a model builds llguidance's view of the vocabulary (about
   a second for a 150k vocabulary). The cost per token is in [bench/RESULTS.md](bench/RESULTS.md).
 - A schema llguidance can't compile gets a 400. With `strict: true`, unsupported keywords are
@@ -171,18 +170,18 @@ checkpoint file inside such a directory):
 
 ```bash
 LHAI_MODEL=llama-3.2-3b-mlx4 \
-LHAI_ADAPTERS="eduai=../eduai/adapters/llama32-3b-eduai,eduai-300=../eduai/adapters/llama32-3b-eduai/0000300_adapters.safetensors" \
+LHAI_ADAPTERS="tutor=adapters/tutor,tutor-300=adapters/tutor/0000300_adapters.safetensors" \
   uv run lhai serve
-curl localhost:8000/v1/models        # llama-3.2-3b-mlx4, plus eduai and eduai-300 with parent set
+curl localhost:8000/v1/models        # llama-3.2-3b-mlx4, plus tutor and tutor-300 with parent set
 ```
 
 ```python
-client.chat.completions.create(model="eduai", messages=[...])              # the adapter
+client.chat.completions.create(model="tutor", messages=[...])              # the adapter
 client.chat.completions.create(model="llama-3.2-3b-mlx4", messages=[...])  # the base model
 ```
 
-The adapters above are the ones EduAI trains for Llama-3.2-3B-Instruct 4-bit: the final
-checkpoint and the one from halfway through the same run. Requests without an adapter run the
+Here `tutor` is a LoRA fine-tune of Llama-3.2-3B-Instruct 4-bit and `tutor-300` is the
+checkpoint from halfway through the same training run. Requests without an adapter run the
 base layers only and give the same tokens as a server with no adapters loaded.
 
 ### Thinking models
@@ -206,14 +205,15 @@ closing marker (`</think>` for Qwen3.5, `<channel|>` for Gemma 4's thought chann
 model then writes its answer as usual. The reasoning goes back in `reasoning_content`, in
 streaming deltas too, and the markers appear in neither field. `max_tokens` still counts every
 generated token, thinking included. A JSON `response_format` constrains only the answer: the
-mask starts after the block closes, and the row can't end inside the block. Stop strings apply to the answer only. Asking for
-`max_thinking_tokens` on a model without thinking markers is a 400.
+mask starts after the block closes, and the row can't end inside the block. Stop strings
+apply to the answer only. Asking for `max_thinking_tokens` on a model without thinking markers
+is a 400.
 
 ### Scoring (`POST /v1/score`)
 
 `/v1/score` teacher-forces a fixed assistant answer and returns the log-probability of
-candidate strings at given character offsets of it, with no sampling. Vizor uses it to measure
-how likely the model is to cite each source at a citation site.
+candidate strings at given character offsets of it, with no sampling. A citation checker can use it to
+measure how likely the model is to cite each source at a citation site.
 
 ```bash
 curl localhost:8000/v1/score -H 'content-type: application/json' -d '{
@@ -394,13 +394,14 @@ caches work and what differs from the torch path.
   that way locally, but the job hasn't run on GitHub yet.
 - `make test-mlx` runs the batched-vs-sequential greedy check through the scheduler on the real
   4-bit checkpoints, plus the same check with the prefix cache on and a shared system prompt,
-  `/v1/score` against a direct mlx-lm forward that follows Vizor's MLXScorer (to 1e-4, with a
+  `/v1/score` against a reference scorer that calls mlx-lm directly (to 1e-4, with a
   site inside a token), and `max_thinking_tokens` on the thinking models (the budget closes the
   block with the model's own marker; a JSON answer after it parses). On
   `qwen2.5-0.5b-mlx4,qwen3.5-9b-mlx4,gemma-4-e4b-mlx4`: 28 passed, 3 skipped (the thinking
   tests, on Qwen2.5, which has no thinking markers). On `gemma-4-12b-mlx4`: 12 passed and the
   batched greedy check is an expected failure: one prompt of five drifts at token 22, which
-  fits the seed check in bench/RESULTS.md.
+  fits the seed check in bench/RESULTS.md. Both counts are from 2026-09-27 on the code at
+  d06b0d9; the runs left no committed log.
 - `make test-model` runs on the real SmolLM2-135M on CPU fp32:
   - Five mixed-length prompts with a mid-stream join produce exactly the same 32 greedy tokens
     batched as one at a time.
@@ -414,10 +415,10 @@ caches work and what differs from the torch path.
   on a tiny random Llama (each adapter row matches mlx-lm's own LoRA layer, mixed batches match
   each row alone, base rows are bit-identical to a model without adapters).
 - On the real models (`make test-model`, `make test-mlx`): batched JSON-schema generation on
-  SmolLM2-135M and Qwen2.5-0.5B, and EduAI's two Llama-3.2-3B adapters in one mixed batch with
-  base rows, each row compared token for token with mlx-lm's `stream_generate` with that
-  adapter loaded (`tests/test_lora_model.py`; set `LHAI_EDUAI_ADAPTER` if the adapters aren't
-  in `../eduai/adapters/llama32-3b-eduai`).
+  SmolLM2-135M and Qwen2.5-0.5B, and two Llama-3.2-3B LoRA adapters (the final and the
+  halfway checkpoint of one training run) in one mixed batch with base rows, each row compared
+  token for token with mlx-lm's `stream_generate` with that adapter loaded
+  (`tests/test_lora_model.py`; point `LHAI_LORA_ADAPTER` at the adapter directory).
 - CI runs lint and unit tests. It also runs the Docker image with `--network none` against the
   pinned weights (see `.github/workflows/ci.yml`). CI does not download models for the unit job.
 
