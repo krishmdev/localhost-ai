@@ -6,7 +6,7 @@ from fakes import EOS, FakeRunner, FakeTokenizer, VirtualClock, reference
 
 from localhost_ai.engine.controller import AIMDConfig, AIMDController, FixedController
 from localhost_ai.engine.request import DoneEvent, ErrorEvent, Request, SamplingParams, TokenEvent
-from localhost_ai.engine.scheduler import QueueFull, Scheduler, SchedulerConfig
+from localhost_ai.engine.scheduler import JobQueueFull, QueueFull, Scheduler, SchedulerConfig
 from localhost_ai.memory import FakeProbe
 
 GREEDY = SamplingParams(temperature=0.0, max_tokens=12)
@@ -138,6 +138,29 @@ def test_queue_full_raises():
     s.add(req([2]))
     with pytest.raises(QueueFull):
         s.add(req([3]))
+
+
+def test_job_queue_full_raises():
+    s = make(max_jobs=2)
+    s.add_job(lambda: None, lambda msg: None)
+    s.add_job(lambda: None, lambda msg: None)
+    with pytest.raises(JobQueueFull):
+        s.add_job(lambda: None, lambda msg: None)
+
+
+def test_one_job_per_step_between_decode_steps():
+    s = make()
+    r = req([1, 2, 3], SamplingParams(max_tokens=6, temperature=0.0))
+    s.add(r)
+    s.step()  # prefill
+    order = []
+    for i in range(3):
+        s.add_job(lambda i=i: order.append(("job", i, len(r.generated))), lambda msg: None)
+    while s.jobs:
+        s.step()
+    assert [o[:2] for o in order] == [("job", 0), ("job", 1), ("job", 2)]
+    # each job saw one more generated token than the one before: a decode step ran between them
+    assert [o[2] for o in order] == [order[0][2] + k for k in range(3)]
 
 
 def test_oom_preempts_newest_and_output_is_unchanged():

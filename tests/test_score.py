@@ -189,3 +189,16 @@ def test_logprob_rows_is_a_log_softmax():
     lp = FakeRunner().logprob_rows([1, 2, 3], [0, 2])
     assert lp.shape == (2, 40)
     assert torch.allclose(lp.exp().sum(-1), torch.ones(2))
+
+
+async def test_a_job_whose_caller_went_away_is_skipped():
+    svc = score_service()  # engine not started, so the job waits until step() below
+    ran = []
+    task = asyncio.create_task(svc.engine.run(lambda: ran.append(1)))
+    while not svc.engine.scheduler.jobs:
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    svc.engine.scheduler.step()
+    assert ran == [] and not svc.engine.scheduler.jobs

@@ -125,9 +125,13 @@ class AsyncEngine:
 
     async def run(self, fn: Callable[[], T]) -> T:
         """Run `fn` on the compute thread between scheduler iterations and return its result
-        (or raise its exception) here. For model work that isn't generation, like /v1/score."""
+        (or raise its exception) here. For model work that isn't generation, like /v1/score.
+        Raises JobQueueFull if too many jobs are waiting. If the caller is cancelled before the
+        job's turn comes, `fn` is skipped."""
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
+        gone = threading.Event()
+        fut.add_done_callback(lambda f: f.cancelled() and gone.set())
 
         def settle(result: Any, exc: BaseException | None) -> None:
             if fut.done():  # the caller went away
@@ -142,6 +146,8 @@ class AsyncEngine:
                 loop.call_soon_threadsafe(settle, result, exc)
 
         def job() -> None:
+            if gone.is_set():
+                return
             try:
                 result = fn()
             except Exception as e:  # handed back to the caller

@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     mem_limit_bytes: int = 0
 
     max_queue: int = Field(256, ge=1)
+    # /v1/score requests waiting for the compute thread; one runs per scheduler iteration
+    max_score_jobs: int = Field(16, ge=1)
     max_prefill_tokens_per_step: int = Field(2048, ge=1)
     max_context: int = Field(2048, ge=2)
     default_max_tokens: int = 256

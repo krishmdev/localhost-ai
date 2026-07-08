@@ -49,6 +49,15 @@ class QueueFull(Exception):
         self.retry_after_s = retry_after_s
 
 
+class JobQueueFull(Exception):
+    """Too many compute-thread jobs (/v1/score requests) are already waiting."""
+
+    def __init__(self, depth: int, retry_after_s: float) -> None:
+        super().__init__(f"job queue full ({depth} waiting)")
+        self.depth = depth
+        self.retry_after_s = retry_after_s
+
+
 class NullMetrics:
     def step(self, iter_s: float, prefill_s: float, decode_s: float, batch: int,
              prefill_tokens: int) -> None: ...
@@ -63,6 +72,7 @@ class NullMetrics:
 @dataclass
 class SchedulerConfig:
     max_queue: int = 256
+    max_jobs: int = 16
     max_prefill_tokens_per_step: int = 2048
     max_context: int = 2048
     control_interval_s: float = 1.0
@@ -138,8 +148,12 @@ class Scheduler:
     def add_job(self, run: Callable[[], None], abort: Callable[[str], None]) -> None:
         """Queue `run` for the compute thread, before the next iteration. It reports its own
         result and must catch its own exceptions. `abort` is called instead if the scheduler
-        fails everything (a model swap) before the job ran."""
-        self.jobs.append((run, abort))
+        fails everything (a model swap) before the job ran. Raises JobQueueFull when
+        `max_jobs` jobs are already waiting."""
+        with self._lock:
+            if len(self.jobs) >= self.cfg.max_jobs:
+                raise JobQueueFull(len(self.jobs), self.cfg.control_interval_s)
+            self.jobs.append((run, abort))
 
     def has_work(self) -> bool:
         return bool(self.waiting or self.running or self.jobs)
@@ -153,8 +167,10 @@ class Scheduler:
         self._drop_cancelled()
         if now - self._last_tick >= self.cfg.control_interval_s:
             self.tick(now)
+        # At most one job per iteration, so a burst of /v1/score requests delays each decode
+        # step by one job, not by all of them.
         ran = False
-        while self.jobs:
+        if self.jobs:
             self.jobs.popleft()[0]()
             ran = True
         if not self.running and not self.waiting:

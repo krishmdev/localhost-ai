@@ -84,7 +84,7 @@ class Service:
         probe = self.parts.probe if self.parts.probe is not None else self.probe
         sched = Scheduler(
             self.parts.runner, self.parts.tokenizer, controller, probe=probe,
-            cfg=SchedulerConfig(max_queue=s.max_queue,
+            cfg=SchedulerConfig(max_queue=s.max_queue, max_jobs=s.max_score_jobs,
                                 max_prefill_tokens_per_step=s.max_prefill_tokens_per_step,
                                 max_context=s.max_context,
                                 control_interval_s=s.control_interval_s,
