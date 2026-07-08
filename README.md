@@ -232,8 +232,11 @@ order, `token_index`, `candidates` (log-probabilities), `renorm` (the same renor
 candidates) and `forced`. It also reports `model`, `revision`, `commit` (plus `dirty`),
 `tokenizer_sha` (sha256 over the checkpoint's tokenizer files) and `prompt_tokens`. A sequence
 longer than `LHAI_MAX_CONTEXT` is a 400 with code `context_length_exceeded`; nothing is
-truncated. The forward passes run on the compute thread between scheduler iterations, so
-scoring can share a server with generation traffic. Scores are always for the base model, even
+truncated. The forward passes run on the compute thread, one scoring request per scheduler
+iteration, so scoring can share a server with generation traffic. Limits, checked before any
+forward pass: 64 candidates per site, 32 tokens per candidate and 256 forward passes per
+request (a 400 with code `score_too_large` past that). More than `LHAI_MAX_SCORE_JOBS` (16)
+waiting requests get a 429, and a request whose client disconnects is dropped. Scores are always for the base model, even
 when LoRA adapters are loaded.
 
 ## How it works
@@ -360,6 +363,9 @@ Environment variables, prefix `LHAI_` (see `src/localhost_ai/config.py`):
 - `MEM_LOW_WM` (0.10), `MEM_HIGH_WM` (0.20), `MEM_RESERVE` (0.15).
 - `CONTROL_INTERVAL_S` (1), `N_MIN` (20).
 - `MAX_QUEUE` (256), `MAX_PREFILL_TOKENS_PER_STEP` (2048), `MAX_CONTEXT` (2048).
+- `MAX_SCORE_JOBS` (16): `/v1/score` requests waiting for the compute thread.
+- `MAX_REQUEST_BYTES` (1 MiB): larger HTTP bodies get a 413 before parsing. Requests are also
+  capped at 256 messages and 200,000 characters per message (or `/v1/score` continuation).
 - `PREFIX_CACHE` (off), `PREFIX_CACHE_MB` (512), `PREFIX_MIN_TOKENS` (32): reuse the prefill
   of a prompt prefix that recent requests share, such as a long system prompt.
 - `ADMIN_TOKEN`, `ALLOWED_HOSTS`, `ALLOWED_ORIGINS`.

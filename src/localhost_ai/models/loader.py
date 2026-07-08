@@ -55,7 +55,7 @@ class LoadedModel:
     @property
     def tokenizer_sha(self) -> str:
         """sha256 over the checkpoint's tokenizer* files (name, then bytes, in name order), the
-        same digest Vizor's MLXScorer computes, so a client can tell tokenizers apart."""
+        same digest a client-side scorer can compute, so a client can tell tokenizers apart."""
         return files_sha(f for f in self.path.glob("tokenizer*") if f.is_file())
 
 

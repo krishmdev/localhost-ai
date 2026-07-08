@@ -299,21 +299,29 @@ matcher's.
 
 ## Scoring (`engine/score.py`)
 
-`POST /v1/score` follows Vizor's MLXScorer step for step. The route renders the chat template
+`POST /v1/score` follows a reference scorer that calls mlx-lm directly, step for step. The route renders the chat template
 as text, and `score()` tokenizes prompt plus continuation together with offsets, maps each site
 to the first token that ends past it, and asks the runner for next-token log-probabilities at
 the rows it needs. `logprob_rows` is one forward over the whole sequence with no cache. The
-MLX runner casts only the requested rows to float32 before the log-softmax, so the bf16 logits
-of the whole sequence are the largest temporary (about 0.6 GB for 2,000 tokens of Qwen's 152k
-vocabulary). Candidates inside a token, or that span several tokens, cost one more forward each
+torch runner passes the rows as `logits_to_keep`, so only they go through the LM head. The MLX
+runner casts only the requested rows to float32 before the log-softmax; past `prefill_step`
+(512) tokens it runs the sequence in chunks through the model's single-sequence caches and
+stops after the last requested row, so the bf16 logits held at once are at most 512 x vocab
+(about 0.27 GB for Gemma's 262k vocabulary) instead of the whole sequence's. Candidates inside a token, or that span several tokens, cost one more forward each
 (two per site for the shared prefix piece). Reusing a stored prefix was left out: the
 equivalence with a plain forward is what the client checks, and a cached prefix changes the
 order of the arithmetic.
 
 The route runs `score()` through `AsyncEngine.run`, which queues a job that the scheduler runs
-at the start of its next iteration, on the compute thread. A job never overlaps a batch step
-and needs no lock on the model. A model swap fails pending jobs with a 503 instead of running
-them against the next model.
+at the start of an iteration, on the compute thread. A job never overlaps a batch step and
+needs no lock on the model. The scheduler runs at most one job per iteration, so a burst of
+scoring requests delays each decode step by one request's forwards, not all of them. The
+job queue holds `LHAI_MAX_SCORE_JOBS` (16) requests; past that the route answers 429 with
+`Retry-After`. Before any forward, `score()` rejects a request over its limits with a 400: 64
+candidates per site, 32 tokens per candidate, 256 forward passes in all. The route watches for
+a client disconnect; a request whose client has gone is skipped if still queued and stops
+between forward passes if running. A model swap fails pending jobs with a 503 instead of
+running them against the next model.
 
 ## Multi-LoRA (`engine/lora.py`)
 
