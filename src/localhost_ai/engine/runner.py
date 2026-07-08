@@ -130,9 +130,12 @@ class HFModelRunner:
 
     @torch.inference_mode()
     def logprob_rows(self, ids: list[int], rows: list[int]) -> torch.Tensor:
-        """Next-token log-probabilities after each of `rows` of one sequence (for /v1/score)."""
+        """Next-token log-probabilities after each of `rows` of one sequence (for /v1/score).
+        Only the requested rows go through the LM head (logits_to_keep), so the logits held
+        are rows x vocab, not sequence x vocab."""
         x = torch.tensor([ids], dtype=torch.long, device=self.device)
-        logits = self.model(input_ids=x, use_cache=False).logits[0, rows].float()
+        keep = torch.tensor(rows, dtype=torch.long, device=self.device)
+        logits = self.model(input_ids=x, use_cache=False, logits_to_keep=keep).logits[0].float()
         return torch.log_softmax(logits, dim=-1).cpu()
 
     def merge(self, a: HFBatch, b: HFBatch) -> HFBatch:

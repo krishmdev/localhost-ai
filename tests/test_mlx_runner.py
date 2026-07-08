@@ -389,3 +389,20 @@ def test_logprob_rows_matches_a_plain_forward(request, name):
     got = r.logprob_rows(ids, rows)
     assert got.dtype == torch.float32 and got.shape == (3, ref.shape[1])
     assert torch.allclose(got, ref[rows], atol=1e-5)
+
+
+@pytest.mark.parametrize("step", [3, 8])
+@pytest.mark.parametrize("name", ["llama", "hybrid", "windowed"])
+def test_long_logprob_rows_run_in_chunks_and_match_a_plain_forward(request, name, step):
+    """Past prefill_step tokens logprob_rows runs chunk by chunk through the single-sequence
+    caches (bounding the logits held at once) and gives the same rows, in the order asked."""
+    base = request.getfixturevalue({"llama": "runner", "hybrid": "hybrid",
+                                    "windowed": "windowed"}[name])
+    r = MLXModelRunner(base.model, eos_ids=frozenset({0}), prefill_step=step)
+    ids = PROMPTS[0] + FORCED[0] + PROMPTS[3] + FORCED[1]
+    rows = [len(ids) - 1, 0, 5, 6, 7, 12]
+    logits = base.model(mx.array([ids], dtype=mx.int32))[0].astype(mx.float32)
+    ref = torch.from_numpy(np.array(logits - mx.logsumexp(logits, axis=-1, keepdims=True)))
+    got = r.logprob_rows(ids, rows)
+    assert got.shape == (len(rows), ref.shape[1])
+    assert_close(got, ref[rows])

@@ -82,3 +82,13 @@ def test_drop_prefixes(model):
     size = pc.nbytes
     assert size == 20 * 2 * 2 * 2 * 16 * 4
     assert cached.drop_prefixes() == size and not pc.entries
+
+
+@torch.inference_mode()
+def test_logprob_rows_keeps_only_the_requested_rows_and_matches_a_full_forward(model):
+    ids = SYSTEM + SUFFIXES[2] + FORCED[0]
+    rows = [3, 0, len(ids) - 1]  # any order
+    ref = torch.log_softmax(model(input_ids=torch.tensor([ids])).logits[0].float(), dim=-1)
+    got = runner(model).logprob_rows(ids, rows)
+    assert got.shape == (3, 128)
+    close(got, ref[rows])
