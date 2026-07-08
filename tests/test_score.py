@@ -202,3 +202,58 @@ async def test_a_job_whose_caller_went_away_is_skipped():
         await task
     svc.engine.scheduler.step()
     assert ran == [] and not svc.engine.scheduler.jobs
+
+
+def test_too_many_candidates_at_a_site_is_400(client):
+    r = post(client, [{"char_offset": 1, "candidates": [f"c{i}" for i in range(65)]}])
+    assert r.status_code == 400
+
+
+def test_a_candidate_over_the_token_cap_is_400(client):
+    r = post(client, [{"char_offset": 1, "candidates": ["x" * 33]}])
+    assert r.status_code == 400
+    assert "tokens" in r.json()["error"]["message"]
+
+
+def test_too_many_forced_forwards_is_400_before_any_forward():
+    svc = score_service()
+    runner = svc.parts.runner
+    # 5 sites x 60 two-token candidates = 300 teacher-forced passes, over the 256 cap
+    cands = [f"{a}{b}" for a in "xyz" for b in "abcdefghijklmnopqrst"]
+    sites = [{"char_offset": i, "candidates": cands} for i in range(1, 6)]
+    with TestClient(create_app(svc)) as c:
+        runner.calls.clear()
+        r = post(c, sites)
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "score_too_large"
+    assert not [k for k in runner.calls if k[0] == "score"]
+
+
+def test_under_the_forward_cap_is_scored(client):
+    sites = [{"char_offset": 1, "candidates": [f"x{b}" for b in "abcdefghijklmnopqrst"]}]
+    assert post(client, sites).status_code == 200
+
+
+async def test_a_full_score_queue_is_429():
+    svc = score_service(max_score_jobs=1)
+    app = create_app(svc)  # engine not started, so the first job stays queued
+    body = {"messages": MSG, "continuation": CONT,
+            "sites": [{"char_offset": 0, "candidates": ["t"]}]}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                 base_url="http://localhost") as http:
+        first = asyncio.create_task(http.post("/v1/score", json=body))
+        while not svc.engine.scheduler.jobs:
+            await asyncio.sleep(0.01)
+        r = await http.post("/v1/score", json=body)
+        assert r.status_code == 429
+        assert r.json()["error"]["code"] == "queue_full" and "retry-after" in r.headers
+        svc.engine.scheduler.step()
+        assert (await first).status_code == 200
+
+
+def test_score_stops_between_forwards_once_the_caller_is_gone():
+    from localhost_ai.engine.score import Stopped
+    runner = FakeRunner()
+    with pytest.raises(Stopped):
+        score(TOK, runner.logprob_rows, head(), CONT, [Site(3, ("xy",))], 100, stop=lambda: True)
+    assert not runner.calls

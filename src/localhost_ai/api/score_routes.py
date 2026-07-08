@@ -1,13 +1,20 @@
 """POST /v1/score (engine/score.py): candidate log-probabilities at sites of a fixed
-continuation. The forward passes run on the compute thread between scheduler iterations."""
+continuation. The forward passes run on the compute thread between scheduler iterations, one
+request per iteration; a full job queue is a 429, and a request whose client disconnects is
+dropped (before its turn, or between forward passes)."""
 
 from __future__ import annotations
+
+import asyncio
+import contextlib
+import threading
 
 from fastapi import APIRouter, Request
 
 from ..engine.engine import JobAborted
 from ..engine.runner import is_oom
-from ..engine.score import ScoreError, Site, score
+from ..engine.scheduler import JobQueueFull
+from ..engine.score import ScoreError, Site, Stopped, score
 from ..service import Service
 from .openai_routes import error
 from .schemas import ScoreRequest, ScoreResponse, ScoreSiteResult
@@ -33,15 +40,34 @@ async def score_route(body: ScoreRequest, request: Request):
         return error(400, f"chat template failed: {exc}", "invalid_request_error")
     sites = [Site(s.char_offset, tuple(s.candidates)) for s in body.sites]
     generation = svc.generation
+    gone = threading.Event()
 
     def job():
         if svc.generation != generation or svc.parts is not parts:
             raise JobAborted("model changed while the request was queued")
         return score(parts.tokenizer, parts.runner.logprob_rows, head, body.continuation, sites,
-                     svc.settings.max_context)
+                     svc.settings.max_context, stop=gone.is_set)
 
+    async def watch() -> None:
+        while not await request.is_disconnected():
+            await asyncio.sleep(0.25)
+        gone.set()
+        run.cancel()
+
+    run = asyncio.ensure_future(svc.engine.run(job))
+    watcher = asyncio.ensure_future(watch())
     try:
-        results, n = await svc.engine.run(job)
+        results, n = await run
+    except JobQueueFull as exc:
+        return error(429, str(exc), "rate_limit_error", "queue_full",
+                     {"Retry-After": str(max(1, round(exc.retry_after_s)))})
+    except asyncio.CancelledError:
+        gone.set()
+        if not watcher.done():  # this handler was cancelled, not the job by the watcher
+            raise
+        return error(499, "client disconnected", "invalid_request_error")
+    except Stopped:
+        return error(499, "client disconnected", "invalid_request_error")
     except ScoreError as exc:
         return error(400, str(exc), "invalid_request_error", exc.code)
     except JobAborted as exc:
@@ -51,6 +77,10 @@ async def score_route(body: ScoreRequest, request: Request):
             return error(503, f"out of memory while scoring: {exc}", "server_error",
                          "out_of_memory")
         raise
+    finally:
+        watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watcher
     commit, dirty = svc.commit
     return ScoreResponse(
         model=svc.model_name, revision=parts.info.get("revision"), commit=commit, dirty=dirty,

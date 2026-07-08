@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -169,7 +169,8 @@ class ModelLoad(BaseModel):
 
 class ScoreSite(BaseModel):
     char_offset: int = Field(ge=0)  # into the continuation
-    candidates: list[str] = Field(min_length=1)
+    candidates: list[Annotated[str, Field(max_length=256)]] = Field(min_length=1,
+                                                                    max_length=64)
 
 
 class ScoreRequest(BaseModel):
