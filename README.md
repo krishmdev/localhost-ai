@@ -45,7 +45,7 @@ LHAI_MODEL=qwen2.5-0.5b-mlx4 uv run lhai serve --port 8000
 ```
 
 The larger MLX presets, `gemma-4-e4b-mlx4` (5.2 GB download), `qwen3.5-9b-mlx4` (6.0 GB) and
-`gemma-4-12b-mlx4` (6.3 GB), are fetched with `LHAI_MODEL=<preset> uv run lhai models pull`, and
+`gemma-4-12b-mlx4` (6.8 GB), are fetched with `LHAI_MODEL=<preset> uv run lhai models pull`, and
 `LHAI_MLX_PRESETS=qwen3.5-9b-mlx4,gemma-4-e4b-mlx4 make test-mlx` runs the same checks on them.
 
 `gemma-4-12b-mlx4` is tight on a 16 GB Mac. Measured with `bench/mlx_direct.py`
@@ -365,8 +365,9 @@ Environment variables, prefix `LHAI_` (see `src/localhost_ai/config.py`):
 - `ADAPTERS`: LoRA adapters for the startup model (MLX presets), `name=path,name2=path2`.
 
 Models are pinned in `models.yaml` (repo and commit) and hashed in `models.lock`.
-`lhai models pull --all` also fetches SmolLM2-360M, Qwen2.5-0.5B and the three MLX presets
-(about 13 GB with the default model).
+`lhai models pull --all` fetches all nine presets: the three torch ones (SmolLM2-135M,
+SmolLM2-360M, Qwen2.5-0.5B) and the six MLX ones. The MLX checkpoints come to about 22 GB and
+everything to about 24 GB.
 
 A preset with `backend: mlx` names a pre-quantized MLX checkpoint (`quantization: mlx4` or
 `mlx8`, checked against the checkpoint's `config.json` on load) and runs through
@@ -500,6 +501,14 @@ docs/               architecture.md, controller.md, verification.md, figures/, r
 Built on PyTorch, Hugging Face Transformers, MLX and mlx-lm, llguidance, FastAPI,
 prometheus-client, Prometheus and Grafana. The continuous-batching approach follows Hugging
 Face TGI v1 (concatenate/filter), and recompute preemption follows vLLM. The default model is
-SmolLM2-135M-Instruct by Hugging Face (Apache-2.0). The optional MLX presets are mlx-community
-conversions of Qwen2.5 and Qwen3.5 (Apache-2.0) and Gemma 4 (Gemma terms of use); they are
-downloaded, not redistributed here. The code is MIT licensed (see `LICENSE`).
+SmolLM2-135M-Instruct by Hugging Face (Apache-2.0); the other torch presets are SmolLM2-360M
+(Apache-2.0) and Qwen2.5-0.5B (Apache-2.0). The optional MLX presets are mlx-community
+conversions of:
+- Qwen2.5-0.5B and Qwen3.5-9B (Apache-2.0);
+- Qwen2.5-3B (Qwen research license, `qwen-research`, not Apache);
+- Llama 3.2 3B (Llama 3.2 Community License);
+- Gemma 4 E4B and 12B. Google's model cards (google/gemma-4-E4B-it, google/gemma-4-12B-it)
+  list Apache-2.0 under the Gemma 4 license page. The mlx-community E4B card still tags the
+  older Gemma terms, and the pinned 12B card has no license field.
+
+They are downloaded, not redistributed here. The code is MIT licensed (see `LICENSE`).
