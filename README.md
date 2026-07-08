@@ -44,9 +44,20 @@ make test-mlx       # batched == sequential greedy tokens on the 4-bit checkpoin
 LHAI_MODEL=qwen2.5-0.5b-mlx4 uv run lhai serve --port 8000
 ```
 
-The larger MLX presets, `gemma-4-e4b-mlx4` (5.2 GB download) and `qwen3.5-9b-mlx4` (6.0 GB), are
-fetched with `LHAI_MODEL=<preset> uv run lhai models pull`, and
-`LHAI_MLX_PRESETS=qwen3.5-9b-mlx4,gemma-4-e4b-mlx4 make test-mlx` runs the same check on them.
+The larger MLX presets, `gemma-4-e4b-mlx4` (5.2 GB download), `qwen3.5-9b-mlx4` (6.0 GB) and
+`gemma-4-12b-mlx4` (6.3 GB), are fetched with `LHAI_MODEL=<preset> uv run lhai models pull`, and
+`LHAI_MLX_PRESETS=qwen3.5-9b-mlx4,gemma-4-e4b-mlx4 make test-mlx` runs the same checks on them.
+
+`gemma-4-12b-mlx4` is tight on a 16 GB Mac. Measured with `bench/mlx_direct.py`
+(`bench/results/gemma-4-12b-direct.json`): 6.24 GiB active after load, 336 KiB of KV per token
+(counting the 40 sliding-window layers as if they never wrap; they stop growing at 1,024
+tokens, so a 2,048-token row holds about 350 MiB), and 17.3, 19.2, 19.9 and 22.3 decode tok/s
+over all rows at batch 1, 2, 4 and 8. Batch 8 with short prompts peaked at 7.49 GiB. Batching
+buys little on this model, so 1 to 2 concurrent requests is the useful range, and 4 rows of
+2,048 tokens is about as far as the memory goes next to other programs. The checkpoint's
+`model_type` is `gemma4_unified`, which the pinned mlx-lm 0.31.3 doesn't list; the loader maps
+it to mlx-lm's `gemma4` class and drops the checkpoint's `vision_embedder` weights, with strict
+loading for everything else.
 
 Run the server natively (Apple GPU on a Mac, CUDA if present, else CPU):
 
@@ -365,8 +376,8 @@ caches work and what differs from the torch path.
 
 ## Tests
 
-- `make test`: 369 tests, most with a deterministic fake model. Without the mlx extra (any
-  machine that isn't Apple silicon) the 64 MLX tests don't run and 305 do. They cover the
+- `make test`: 403 tests, most with a deterministic fake model. 67 of them need the mlx extra
+  and skip on machines that aren't Apple silicon. They cover the
   controller rules and the S1-S6 simulator bounds over 20 seeds, the scheduler (FIFO, stop
   strings, cancel, 429, OOM preemption equivalence, merge OOM, no OOM thrash, a prefill-heavy
   closed loop), KV merge/select/crop, sampling, detokenization, probes, the OpenAI SDK against
@@ -380,8 +391,14 @@ caches work and what differs from the torch path.
   CI workflow has a macOS job for these on MLX's CPU backend (`LHAI_MLX_DEVICE=cpu`); they pass
   that way locally, but the job hasn't run on GitHub yet.
 - `make test-mlx` runs the batched-vs-sequential greedy check through the scheduler on the real
-  4-bit checkpoints, plus the same check with the prefix cache on and a shared system prompt.
-  All 9 cases passed on the three MLX presets.
+  4-bit checkpoints, plus the same check with the prefix cache on and a shared system prompt,
+  `/v1/score` against a direct mlx-lm forward that follows Vizor's MLXScorer (to 1e-4, with a
+  site inside a token), and `max_thinking_tokens` on the thinking models (the budget closes the
+  block with the model's own marker; a JSON answer after it parses). On
+  `qwen2.5-0.5b-mlx4,qwen3.5-9b-mlx4,gemma-4-e4b-mlx4`: 28 passed, 3 skipped (the thinking
+  tests, on Qwen2.5, which has no thinking markers). On `gemma-4-12b-mlx4`: 12 passed and the
+  batched greedy check is an expected failure: one prompt of five drifts at token 22, which
+  fits the seed check in bench/RESULTS.md.
 - `make test-model` runs on the real SmolLM2-135M on CPU fp32:
   - Five mixed-length prompts with a mid-stream join produce exactly the same 32 greedy tokens
     batched as one at a time.
@@ -407,6 +424,16 @@ caches work and what differs from the torch path.
 - No paged attention. The KV cache is one padded tensor per layer, so mixed lengths waste
   memory. The KV budget and ceiling count the padding. docs/architecture.md has the design
   and why it isn't built on top of mlx-lm's cache classes.
+- Batched rows are not bit-identical to solo rows on the 4-bit MLX weights. On Qwen3.5-9B,
+  seeded and greedy requests repeat exactly when run one at a time, but from two rows up some
+  rows diverge within 64 tokens (bench/RESULTS.md, seed check). Send requests one at a time
+  where byte-identical output matters.
+- `/v1/score` scores the base model only, runs one cache-free forward per request (plus one
+  per teacher-forced candidate), and doesn't reuse stored prefixes.
+- `max_thinking_tokens` counts toward `max_tokens` and the context. A 3,000-token budget
+  needs `LHAI_MAX_CONTEXT` above the default 2,048.
+- mlx-lm's own tokenizer wrapper turns `enable_thinking` on by default for Qwen3.5 and Gemma 4;
+  this server keeps the preset's setting (off) unless the request says otherwise.
 - Prefix caching saves prefill, not memory: each row still holds its own copy of the prefix
   KV. It is off by default because a row built on a stored prefix isn't guaranteed bit-identical
   logits on low-precision backends.
