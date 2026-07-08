@@ -1,6 +1,6 @@
 """/v1/score's scoring on the real 4-bit MLX checkpoints, against a direct mlx-lm forward that
-follows Vizor's MLXScorer step by step (joint tokenization, in-place reads, back-off and teacher
-forcing inside a token). Presets that aren't downloaded are skipped.
+follows a client-side MLX scorer step by step (joint tokenization, in-place reads, back-off and
+teacher forcing inside a token). Presets that aren't downloaded are skipped.
 
     uv run pytest -q -m mlx_model tests/test_score_model.py
     LHAI_MLX_PRESETS=qwen2.5-3b-mlx4,gemma-4-e4b-mlx4 uv run pytest -q -m mlx_model \
@@ -44,7 +44,7 @@ def loaded(request):
 
 
 def mlx_scorer_reference(m, messages, continuation, sites):
-    """Vizor's MLXScorer.score, on the same weights, with mlx-lm's own tokenizer wrapper."""
+    """A client-side MLX scorer's score(), on the same weights, with mlx-lm's tokenizer wrapper."""
     import mlx.core as mx
     from mlx_lm.tokenizer_utils import load as load_tokenizer
 

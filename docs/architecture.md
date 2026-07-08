@@ -350,7 +350,7 @@ share prefixes as well. That isn't done.
 The tests in `tests/test_lora.py` build random adapters for a tiny Llama. Each adapter row must
 match mlx-lm's own `load_adapters` model, mixed batches must match each row alone, and base
 rows must be bit-identical to the model without adapters. `tests/test_lora_model.py` does the
-same with EduAI's adapters on Llama-3.2-3B, token for token against mlx-lm's `stream_generate`.
+same with real MLX LoRA adapters on Llama-3.2-3B, token for token against mlx-lm's `stream_generate`.
 
 ## Names for latency
 
