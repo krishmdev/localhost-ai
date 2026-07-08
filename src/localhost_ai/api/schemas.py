@@ -6,10 +6,15 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Request size caps. The chat template and the tokenizer run on the event loop, so their input
+# is bounded here (and the whole body by LHAI_MAX_REQUEST_BYTES in app.py).
+MAX_MESSAGES = 256
+MAX_CONTENT_CHARS = 200_000
+
 
 class ChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool", "developer"]
-    content: str
+    content: str = Field(max_length=MAX_CONTENT_CHARS)
 
 
 class StreamOptions(BaseModel):
@@ -45,7 +50,7 @@ class ResponseFormat(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model: str | None = None
-    messages: list[ChatMessage] = Field(min_length=1)
+    messages: list[ChatMessage] = Field(min_length=1, max_length=MAX_MESSAGES)
     temperature: float = Field(1.0, ge=0.0, le=2.0)
     top_p: float = Field(1.0, gt=0.0, le=1.0)
     top_k: int = Field(0, ge=0)  # extension; 0 = off
@@ -178,8 +183,8 @@ class ScoreRequest(BaseModel):
     of the assistant turn (teacher forcing, no sampling)."""
 
     model: str | None = None
-    messages: list[ChatMessage] = Field(min_length=1)
-    continuation: str
+    messages: list[ChatMessage] = Field(min_length=1, max_length=MAX_MESSAGES)
+    continuation: str = Field(max_length=MAX_CONTENT_CHARS)
     sites: list[ScoreSite] = Field(min_length=1, max_length=1024)
     chat_template_kwargs: dict | None = None
 

@@ -255,3 +255,34 @@ def test_engine_stop_waits_for_a_long_step():
     assert svc.engine.stop(timeout=0.05) is False and svc.engine.alive
     release.set()
     assert svc.engine.stop(timeout=5) is True and not svc.engine.alive
+
+
+def test_a_message_over_the_content_cap_is_400(client):
+    from localhost_ai.api.schemas import MAX_CONTENT_CHARS
+    r = client.post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": "a" * (MAX_CONTENT_CHARS + 1)}]})
+    assert r.status_code == 400 and "messages.0.content" in r.json()["error"]["message"]
+
+
+def test_too_many_messages_is_400(client):
+    from localhost_ai.api.schemas import MAX_MESSAGES
+    r = client.post("/v1/chat/completions", json={
+        "messages": [{"role": "user", "content": "hi"}] * (MAX_MESSAGES + 1)})
+    assert r.status_code == 400
+
+
+def test_a_body_over_the_byte_cap_is_413_before_parsing():
+    with TestClient(create_app(fake_service(max_request_bytes=4096))) as c:
+        big = json.dumps({"messages": [{"role": "user", "content": "a" * 5000}]})
+        r = c.post("/v1/chat/completions", content=big,
+                   headers={"content-type": "application/json"})
+        assert r.status_code == 413 and r.json()["error"]["code"] == "request_too_large"
+        # without a Content-Length (chunked), counted as it arrives
+        r = c.post("/v1/chat/completions", content=iter([big[:3000].encode(), big[3000:].encode()]),
+                   headers={"content-type": "application/json"})
+        assert r.status_code == 413
+        # a body under the cap, sent in chunks, still reaches the route whole
+        small = json.dumps({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 3})
+        r = c.post("/v1/chat/completions", content=iter([small[:10].encode(), small[10:].encode()]),
+                   headers={"content-type": "application/json"})
+        assert r.status_code == 200

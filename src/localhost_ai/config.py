@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     max_queue: int = Field(256, ge=1)
     # /v1/score requests waiting for the compute thread; one runs per scheduler iteration
     max_score_jobs: int = Field(16, ge=1)
+    # HTTP request bodies over this are refused with 413 before they are parsed
+    max_request_bytes: int = Field(1 << 20, ge=1024)
     max_prefill_tokens_per_step: int = Field(2048, ge=1)
     max_context: int = Field(2048, ge=2)
     default_max_tokens: int = 256
