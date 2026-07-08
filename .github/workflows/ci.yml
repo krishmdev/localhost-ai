@@ -16,8 +16,9 @@ jobs:
       - run: uv run pytest -q
 
   mlx:
-    # The MLX runner, scheduler and loader tests on tiny in-process models. GitHub's macOS
-    # runners have no usable Metal device, so MLX runs on its CPU backend here.
+    # The whole suite with the mlx extra, so the tests that skip without MLX (runner,
+    # scheduler, loader, LoRA and prefix caching on tiny in-process models) run too. GitHub's
+    # macOS runners have no usable Metal device, so MLX runs on its CPU backend here.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +26,7 @@ jobs:
         with:
           version: "0.9.28"
       - run: uv sync --frozen --extra cpu --extra dev --extra mlx
-      - run: uv run pytest -q tests/test_mlx_runner.py tests/test_mlx_scheduler.py tests/test_mlx_load.py
+      - run: uv run pytest -q
         env:
           LHAI_MLX_DEVICE: cpu
 
