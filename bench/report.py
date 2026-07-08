@@ -26,6 +26,26 @@ TARGET_NAMES = {"cpu-docker": "CPU, Docker (linux/arm64 VM; contended shared hos
 SWEEPS = ("mps-native", "mlx-qwen2.5-0.5b", "mlx-gemma-4-e4b", "mlx-qwen3.5-9b", "cpu-docker")
 
 
+# Results recorded before run manifests carried the code commit: the commit that added (or last
+# replaced) each file. The code they ran is at or before it; later commits changed the
+# scheduler, so these numbers describe that earlier code.
+PRE_MANIFEST_CODE = {"mps-native": "6f521b5", "cpu-docker": "01538ac",
+                     "cpu-mempressure": "bd36812", "cpu-mempressure-before-ceiling-fix": "b3b22fa",
+                     "cpu-mempressure-controller-guard": "625f407",
+                     "cpu-mempressure-guard-pair": "1e23a03"}
+
+
+def code_line(name: str, d: dict) -> str:
+    """Which code a results file measured, and when it was recorded."""
+    m = d.get("manifest") or {}
+    day = (m.get("recorded_at") or d.get("started") or "")[:10] or "unknown date"
+    commit = (m.get("code") or {}).get("commit")
+    if commit:
+        return f"code at {commit[:7]}, recorded {day}"
+    return (f"recorded {day}, results stored in {PRE_MANIFEST_CODE.get(name, 'an earlier commit')}"
+            " (no code commit in the manifest)")
+
+
 def load(name: str) -> dict | None:
     p = HERE / "results" / f"{name}.json"
     return json.loads(p.read_text()) if p.exists() else None
@@ -204,7 +224,7 @@ def main() -> None:
                 f"{fmt(mem.get('headroom_frac'), 2)} ({mem.get('source')}). "
                 f"Host swap: {pre.get('host_swap')}."
                 + (" Warnings: " + "; ".join(pre["warnings"]) if pre.get("warnings") else ""),
-                "", f"Host: {host_line(d['manifest'])}", ""]
+                "", f"Host: {host_line(d['manifest'])}. Provenance: {code_line(label, d)}.", ""]
         if pre.get("backend") == "mlx":
             out += [mlx_memory_note(d), ""]
         if label == "cpu-docker":
@@ -255,7 +275,7 @@ def main() -> None:
     out += ["## Memory pressure (CPU, Docker)", ""]
     for key, heading, fig in (
             ("cpu-mempressure-guard-pair",
-             "Same-session pair with the active-row guard (current code)",
+             "Same-session pair with the active-row guard",
              "mempressure_guard_pair.png"),
             ("cpu-mempressure", "After the KV-ceiling fix, before the guard", "mempressure.png"),
             ("cpu-mempressure-controller-guard",
@@ -268,6 +288,7 @@ def main() -> None:
         if mp is None:
             out += ["Not run yet.", ""]
             continue
+        out += [f"Provenance: {code_line(key, mp)}.", ""]
         c = mp["config"]
         if len(mp["runs"]) == 1:
             r0 = mp["runs"][0]
@@ -535,6 +556,7 @@ def readme_summary() -> list[str]:
             ls = sorted({p["batch_limit"] for p in a.get("trace", [])
                          if p.get("batch_limit") is not None})
             rows += ["", f"AIMD's batch limit during that run: {describe_range(ls)}."]
+        rows += ["", f"Provenance: {code_line('mps-native', d)}."]
         rows += ["", "*Share of completed requests whose per-token latency (TPOT) met the SLO. It "
                  "ignores time to first token, which grows with queueing when the batch is "
                  "capped; that's the TTFT column. Throughput is the server's generated-token "
@@ -544,9 +566,12 @@ def readme_summary() -> list[str]:
              "contended host; its rough numbers are in RESULTS.md only."]
     mp = load("cpu-mempressure-guard-pair")
     if mp:
-        rows += ["", "Memory pressure, same-session pair on the current code (CPU container "
-                 f"capped at {mp['config']['mem_limit']}, {mp['config']['concurrency']} clients, "
-                 f"{mp['config']['max_tokens']} tokens each, {mp['config']['duration']:.0f} s):",
+        day = (mp.get("manifest", {}).get("recorded_at") or "")[:10]
+        rows += ["", f"Memory pressure, same-session pair, recorded {day} and stored in "
+                 f"{PRE_MANIFEST_CODE['cpu-mempressure-guard-pair']} (the manifest has no code "
+                 "commit; the scheduler has changed since). CPU container capped at "
+                 f"{mp['config']['mem_limit']}, {mp['config']['concurrency']} clients, "
+                 f"{mp['config']['max_tokens']} tokens each, {mp['config']['duration']:.0f} s:",
                  ""]
         for r in mp["runs"]:
             st = r["container"]

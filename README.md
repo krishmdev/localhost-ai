@@ -304,6 +304,8 @@ Apple GPU (MPS), native, 64 clients, SLO 70.5 ms per token:
 
 AIMD's batch limit during that run: 8 to 17.
 
+Provenance: recorded 2026-09-24, results stored in 6f521b5 (no code commit in the manifest).
+
 *Share of completed requests whose per-token latency (TPOT) met the SLO. It ignores time to first token, which grows with queueing when the batch is capped; that's the TTFT column. Throughput is the server's generated-token count over the measurement window.
 
 MLX 4-bit presets on the same Mac (runner-only decode, 128 greedy steps; served numbers from each preset's sweep in RESULTS.md):
@@ -316,7 +318,7 @@ MLX 4-bit presets on the same Mac (runner-only decode, 128 greedy steps; served 
 
 NVIDIA CUDA: not measured (no NVIDIA GPU here). The Docker CPU sweep ran on a contended host; its rough numbers are in RESULTS.md only.
 
-Memory pressure, same-session pair on the current code (CPU container capped at 1500m, 32 clients, 512 tokens each, 60 s):
+Memory pressure, same-session pair, recorded 2026-09-25 and stored in 1e23a03 (the manifest has no code commit; the scheduler has changed since). CPU container capped at 1500m, 32 clients, 512 tokens each, 60 s:
 
 - fixed:32: not OOM-killed, 32 tok/s, 7 requests finished inside the window, 0 failed.
 - aimd: not OOM-killed, 37 tok/s, 5 requests finished inside the window, 0 failed.
@@ -476,9 +478,10 @@ caches work and what differs from the torch path.
     longest recent request, and a low ceiling estimate ratcheted L down while admitted rows
     drained. With those, AIMD fell to L = 1 and requests timed out.
   - Both are fixed, with tests.
-  - In the latest same-session pair, AIMD produced 37 tok/s against 32 for fixed:32, with no
-    errors among the requests that finished inside the 60 s window. Both runs drained in under
-    434 s, below the 600 s request timeout behind the earlier failures.
+  - In the latest same-session pair (stored in 1e23a03, before later scheduler changes), AIMD
+    produced 37 tok/s against 32 for fixed:32, with no errors among the requests that finished
+    inside the 60 s window. The runs drained in 365 s (fixed:32) and about 435 s (AIMD), below
+    the 600 s request timeout behind the earlier failures.
   - That is one run each, and only a handful of requests finished inside the window, so it's no
     evidence that AIMD is better, only no sign of the earlier failures.
   - The KV reserve (15%) still sits above the low watermark (10%). Tying them together, or

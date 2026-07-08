@@ -10,7 +10,7 @@ Model `smollm2-135m` (HuggingFaceTB/SmolLM2-135M-Instruct), max_tokens 128, 45 s
 
 Memory probe before the run: limit 3.08 GiB, headroom 0.92 (mps(min(recommended_max, used+os_available))). Host swap: total = 8192.00M  used = 7866.38M  free = 325.62M  (encrypted). Warnings: MPS memory limit is only 3.08 GiB; other processes are holding unified memory
 
-Host: arm64, macOS-26.5.1
+Host: arm64, macOS-26.5.1. Provenance: recorded 2026-09-24, results stored in 6f521b5 (no code commit in the manifest).
 
 | controller | clients | completed | req/s | output tok/s | TTFT p50 / p95 (ms) | request TPOT p50 / p95 (ms) | SLO attainment | errors | host CPU idle before |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -47,7 +47,7 @@ Model `qwen2.5-0.5b-mlx4` (mlx-community/Qwen2.5-0.5B-Instruct-4bit), max_tokens
 
 Memory probe before the run: limit 11.23 GiB, headroom 0.98 (mlx(min(recommended_max, used+os_available))). Host swap: total = 2048.00M  used = 1044.06M  free = 1003.94M  (encrypted).
 
-Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'
+Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'. Provenance: code at cce928c, recorded 2026-09-27.
 
 MLX backend, mlx4 weights, float16 activations. KV 12 KiB per token. MLX active memory before the run: 0.26 GiB. Highest active memory in any telemetry sample during the sweep: 0.44 GiB; lowest headroom 96% of the probe's limit.
 
@@ -83,7 +83,7 @@ Model `gemma-4-e4b-mlx4` (mlx-community/gemma-4-e4b-it-4bit), max_tokens 128, 90
 
 Memory probe before the run: limit 10.29 GiB, headroom 0.62 (mlx(min(recommended_max, used+os_available))). Host swap: total = 2048.00M  used = 687.00M  free = 1361.00M  (encrypted).
 
-Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'
+Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'. Provenance: code at cce928c, recorded 2026-09-27.
 
 MLX backend, mlx4 weights, bfloat16 activations. KV 56 KiB per token. MLX active memory before the run: 3.91 GiB. Highest active memory in any telemetry sample during the sweep: 4.29 GiB; lowest headroom 54% of the probe's limit.
 
@@ -116,7 +116,7 @@ Model `qwen3.5-9b-mlx4` (mlx-community/Qwen3.5-9B-MLX-4bit), max_tokens 128, 90 
 
 Memory probe before the run: limit 10.12 GiB, headroom 0.54 (mlx(min(recommended_max, used+os_available))). Host swap: total = 2048.00M  used = 777.25M  free = 1270.75M  (encrypted).
 
-Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'
+Host: Apple M1 Pro, 16.0 GB, Darwin 26.5.1, power: Now drawing from 'AC Power'. Provenance: code at cce928c, recorded 2026-09-27.
 
 MLX backend, mlx4 weights, bfloat16 activations. KV 32 KiB per token, plus 49 MiB of recurrent state per row. MLX active memory before the run: 4.69 GiB. Highest active memory in any telemetry sample during the sweep: 5.58 GiB; lowest headroom 47% of the probe's limit.
 
@@ -149,7 +149,7 @@ Model `smollm2-135m` (HuggingFaceTB/SmolLM2-135M-Instruct), max_tokens 128, 30 s
 
 Memory probe before the run: limit 4.00 GiB, headroom 0.73 (cgroup.memory). Host swap: total = 12288.00M  used = 11294.25M  free = 993.75M  (encrypted).
 
-Host: arm64, macOS-26.5.1
+Host: arm64, macOS-26.5.1. Provenance: recorded 2026-09-25, results stored in 01538ac (no code commit in the manifest).
 
 These numbers are rough. Other workloads were running on the machine and in the Docker VM during this sweep (host CPU idle before each point ranged 0-83%). The single-client baseline used for calibration was measured under that load, which sets the SLO (635.4 ms); 8 of 8 points with completed requests meet it for 99%+ of them (1 point(s) completed no request inside the window). Across the AIMD runs the batch limit took 1 distinct value(s): stayed at 16. The sweep never had more clients than AIMD's starting limit, so its batch was never saturated and every AIMD point stayed under the SLO: there was nothing to adapt to, and AIMD behaved like a fixed batch of 16 here. This sweep is not evidence for or against the controller.
 
@@ -255,7 +255,9 @@ Not measured. This machine has no NVIDIA GPU. The CUDA probe, the cu126 image an
 
 ## Memory pressure (CPU, Docker)
 
-### Same-session pair with the active-row guard (current code)
+### Same-session pair with the active-row guard
+
+Provenance: recorded 2026-09-25, results stored in 1e23a03 (no code commit in the manifest).
 
 Throughput is the server's token counter over the load window. "Completed" and TTFT only count requests that finished inside that window; with 512-token requests on a slow CPU most were still running at the deadline, so those samples are small.
 
@@ -275,6 +277,8 @@ Host: arm64, macOS-26.5.1
 
 ### After the KV-ceiling fix, before the guard
 
+Provenance: recorded 2026-09-23, results stored in bd36812 (no code commit in the manifest).
+
 Throughput in this run is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
 
 Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 60 s, SLO set loose (1000 ms) so only memory matters. The server is recreated before each mode.
@@ -293,6 +297,8 @@ Host: arm64, macOS-26.5.1
 
 ### AIMD only, with the active-row guard (separate session, no fixed baseline)
 
+Provenance: recorded 2026-09-24, results stored in 625f407 (no code commit in the manifest).
+
 Only `aimd` ran in this session, so there is no same-session baseline; the other runs in this section used different host windows and aren't comparable to it. Requests could keep draining after the load window ends, so TTFT p95 (398 s) includes long queue waits.
 
 Throughput in this run is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
@@ -310,6 +316,8 @@ Server container limited to 1500m (cgroup), 32 clients, max_tokens 512, 60 s, SL
 Host: arm64, macOS-26.5.1
 
 ### Before the KV-ceiling fix (history)
+
+Provenance: recorded 2026-09-23, results stored in b3b22fa (no code commit in the manifest).
 
 Throughput in this run is the older client-side count (tokens of requests that started after the warm-up), not the server counter used above.
 
