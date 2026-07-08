@@ -381,6 +381,8 @@ async def main_async(args) -> dict:
         engines.append(await run_engine(eng, port, prompts, args))
         await asyncio.sleep(args.settle)
     cfg = {k: v for k, v in vars(args).items() if k not in ("logs",)}
+    if cfg.get("manifest"):  # keep local paths out of committed results
+        cfg["manifest"] = Path(cfg["manifest"]).name
     cfg["prompts"] = Path(args.prompts).name
     return {"label": args.label, "started": started, "config": cfg, "engines": engines,
             "manifest": manifest(args.manifest, {"target": args.label,

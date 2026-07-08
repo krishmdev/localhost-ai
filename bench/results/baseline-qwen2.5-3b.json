@@ -25,7 +25,7 @@
   "port": 8431,
   "seed": 0,
   "label": "baseline-qwen2.5-3b",
-  "manifest": "/Users/krish/Developer/portfolio/.tools/run_manifest.py",
+  "manifest": "run_manifest.py",
   "note": "trimmed: concurrency 1,4,16 with 20 s windows instead of the full 1,2,4,8,16,32 sweep at 30 s",
   "out": "bench/results/baseline-qwen2.5-3b.json"
  },
