@@ -8,6 +8,7 @@ teacher forcing inside a token). Presets that aren't downloaded are skipped.
 
 import os
 
+import numpy as np
 import pytest
 
 from localhost_ai.config import get_settings
@@ -51,9 +52,19 @@ def mlx_scorer_reference(m, messages, continuation, sites):
     tok = load_tokenizer(m.path)
     enc = tok._tokenizer
 
-    def logprobs(ids):
-        logits = m.runner.model(mx.array([ids]))[0].astype(mx.float32)
-        return logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+    def logprobs(ids, rows):
+        """A plain forward over the whole sequence. Only `rows` are cast to float32 and kept (the
+        cast and the log-softmax are per row), and the full logits are freed before returning:
+        at 1,470 tokens they are 0.77 GB in bf16 for Gemma's 262k vocabulary, and holding them in
+        float32 ran the 16 GB GPU out of memory."""
+        logits = m.runner.model(mx.array([ids]))[0]
+        sel = logits[mx.array(rows)].astype(mx.float32)
+        out = sel - mx.logsumexp(sel, axis=-1, keepdims=True)
+        mx.eval(out)
+        del logits, sel
+        out = np.array(out)
+        mx.clear_cache()
+        return out
 
     def forced(head_ids, piece, cand):
         a = enc(piece + cand, add_special_tokens=False)["input_ids"]
@@ -62,9 +73,9 @@ def mlx_scorer_reference(m, messages, continuation, sites):
         def seq(tail):
             if not tail:
                 return 0.0
-            lp = logprobs(head_ids + tail)
             n = len(head_ids)
-            return float(sum(lp[n + i - 1, t].item() for i, t in enumerate(tail)))
+            lp = logprobs(head_ids + tail, [n + i - 1 for i in range(len(tail))])
+            return float(sum(float(lp[i, t]) for i, t in enumerate(tail)))
 
         return seq(a) - seq(b)
 
@@ -76,17 +87,19 @@ def mlx_scorer_reference(m, messages, continuation, sites):
     full = head + continuation
     e = enc(full, add_special_tokens=False, return_offsets_mapping=True)
     ids, offs = e["input_ids"], e["offset_mapping"]
-    lp_all = logprobs(ids)
+    at = [next(i for i, (_, en) in enumerate(offs) if en > len(head) + s.char_offset)
+          for s in sites]
+    reads = sorted({t - 1 for t in at if t > 0})
+    lp_all = dict(zip(reads, logprobs(ids, reads), strict=True)) if reads else {}
     out = []
-    for s in sites:
+    for s, t in zip(sites, at, strict=True):
         a = len(head) + s.char_offset
-        t = next(i for i, (_, en) in enumerate(offs) if en > a)
         start = offs[t][0]
         lp = {}
         for c in s.candidates:
             c_ids = enc(c, add_special_tokens=False)["input_ids"]
             if start == a and len(c_ids) == 1 and t > 0:
-                lp[c] = float(lp_all[t - 1, c_ids[0]].item())
+                lp[c] = float(lp_all[t - 1][c_ids[0]])
             else:
                 lp[c] = forced(ids[:t], full[start:a], c)
         out.append((t, lp))
@@ -131,12 +144,46 @@ def test_long_prompt_score_matches_a_direct_mlx_lm_forward(loaded):
     s = sites()
     head = loaded.chat_text(LONG_MSG)
     assert len(loaded.tokenizer.encode(head + CONT)) > 1000
+    ref = mlx_scorer_reference(loaded, LONG_MSG, CONT, s)  # frees its logits as it goes
     got = score(loaded.tokenizer, loaded.runner.logprob_rows, head, CONT, s, 4096)[0]
-    ref = mlx_scorer_reference(loaded, LONG_MSG, CONT, s)
     for r, (t, lp) in zip(got, ref, strict=True):
         assert r.token_index == t
         for c in lp:
             assert abs(r.logprobs[c] - lp[c]) < TOL, (r.char_offset, c, r.logprobs[c], lp[c])
+
+
+def test_long_logprob_rows_equal_the_full_forward_rows(loaded):
+    """logprob_rows runs the output head on the requested rows only, padded to head_min_rows.
+    On the GPU in bf16 that must give the full forward's rows bit for bit. The same rows with
+    the head on exactly those four rows (no padding) are measured and reported as a warning."""
+    import warnings
+
+    import mlx.core as mx
+    import torch
+
+    r = loaded.runner
+    ids = loaded.tokenizer.encode(loaded.chat_text(LONG_MSG) + CONT)
+    assert len(ids) > r.head_min_rows
+    rows = [0, len(ids) // 3, len(ids) - 2, len(ids) - 1]
+    logits = r.model(mx.array([ids]))[0]
+    sel = logits[mx.array(rows)].astype(mx.float32)
+    ref = sel - mx.logsumexp(sel, axis=-1, keepdims=True)
+    mx.eval(ref)
+    del logits, sel
+    ref = torch.from_numpy(np.array(ref))
+    mx.clear_cache()
+    got = r.logprob_rows(ids, rows)
+    mx.clear_cache()
+    keep, r.head_min_rows = r.head_min_rows, 0
+    try:
+        unpadded = r.logprob_rows(ids, rows)
+    finally:
+        r.head_min_rows = keep
+        mx.clear_cache()
+    loose = (unpadded - ref).abs().max().item()
+    warnings.warn(f"{loaded.spec.name} {len(ids)} tokens: head on {len(rows)} unpadded rows, "
+                  f"max |logprob - full forward| = {loose:.3g}", stacklevel=1)
+    assert torch.equal(got, ref), (got - ref).abs().max().item()
 
 
 def test_sites_scored_together_equal_sites_scored_alone(loaded):
