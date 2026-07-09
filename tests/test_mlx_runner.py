@@ -391,18 +391,46 @@ def test_logprob_rows_matches_a_plain_forward(request, name):
     assert torch.allclose(got, ref[rows], atol=1e-5)
 
 
-@pytest.mark.parametrize("step", [3, 8])
-@pytest.mark.parametrize("name", ["llama", "hybrid", "windowed"])
-def test_long_logprob_rows_run_in_chunks_and_match_a_plain_forward(request, name, step):
-    """Past prefill_step tokens logprob_rows runs chunk by chunk through the single-sequence
-    caches (bounding the logits held at once) and gives the same rows, in the order asked."""
-    base = request.getfixturevalue({"llama": "runner", "hybrid": "hybrid",
-                                    "windowed": "windowed"}[name])
-    r = MLXModelRunner(base.model, eos_ids=frozenset({0}), prefill_step=step)
+class _Calls:
+    """Wraps a model and records the shape and cache of every forward."""
+
+    def __init__(self, model):
+        self.model, self.calls = model, []
+
+    def __call__(self, x, cache=None):
+        self.calls.append((tuple(x.shape), cache))
+        return self.model(x, cache=cache)
+
+    def __getattr__(self, name):
+        return getattr(self.model, name)
+
+
+@pytest.mark.parametrize("name", ["llama", "hybrid", "windowed", "windowed_bf16"])
+def test_long_logprob_rows_are_one_forward_and_equal_a_plain_forward(request, name):
+    """Regression: past prefill_step tokens logprob_rows used to run the sequence in chunks
+    through the single-sequence caches. That is the same maths, but in bf16 on the GPU the
+    kernels' arithmetic depends on the sequence length, and on Gemma 4 E4B the scores moved by
+    up to 0.74 against a plain mlx-lm forward once prompts passed 512 tokens. The sequence
+    here is 22 tokens, five and a half of the tiny Gemma's 4-token windows and 8 chunks of
+    prefill_step=3; the rows must come from one cache-free forward over all of it, bit for
+    bit."""
+    if name == "windowed_bf16":
+        from mlx.utils import tree_map
+
+        model = tiny_gemma4()
+        model.update(tree_map(lambda p: p.astype(mx.bfloat16), model.parameters()))
+        mx.eval(model.parameters())
+    else:
+        model = request.getfixturevalue({"llama": "runner", "hybrid": "hybrid",
+                                         "windowed": "windowed"}[name]).model
+    r = MLXModelRunner(model, eos_ids=frozenset({0}), prefill_step=3)
     ids = PROMPTS[0] + FORCED[0] + PROMPTS[3] + FORCED[1]
+    assert len(ids) == 22
     rows = [len(ids) - 1, 0, 5, 6, 7, 12]
-    logits = base.model(mx.array([ids], dtype=mx.int32))[0].astype(mx.float32)
+    logits = model(mx.array([ids], dtype=mx.int32))[0].astype(mx.float32)
     ref = torch.from_numpy(np.array(logits - mx.logsumexp(logits, axis=-1, keepdims=True)))
+    r.model = spy = _Calls(model)
     got = r.logprob_rows(ids, rows)
+    assert spy.calls == [((1, len(ids)), None)]
     assert got.shape == (len(rows), ref.shape[1])
-    assert_close(got, ref[rows])
+    assert torch.equal(got, ref[rows])
