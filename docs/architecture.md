@@ -304,11 +304,15 @@ as text, and `score()` tokenizes prompt plus continuation together with offsets,
 to the first token that ends past it, and asks the runner for next-token log-probabilities at
 the rows it needs. `logprob_rows` is one forward over the whole sequence with no cache. The
 torch runner passes the rows as `logits_to_keep`, so only they go through the LM head. The MLX
-runner casts only the requested rows to float32 before the log-softmax, but the bf16 logits of
-the whole sequence exist until then (about 0.5 MB per token for Gemma's 262k vocabulary, 2 GB
-at 4,096 tokens). Running long sequences in `prefill_step` chunks through the single-sequence
-caches would bound that, and was tried: in bf16 on the GPU the kernels' arithmetic depends on
-the sequence length, and Gemma 4 E4B's scores moved by up to 0.74 against a plain forward once
+runner does the same by hand for the architectures whose output path it knows (Llama, Qwen2,
+Qwen3.5, Gemma 4): the layers and the final norm run once over the whole sequence, then only the
+requested rows' hidden states go through the LM head (or the tied embedding) and Gemma's final
+logit softcap. The rows are padded to at least 64 by repeating the last one, so the head's matmul
+stays a matrix-matrix product as in the full forward, and sequences of 64 tokens or fewer just
+take the plain forward. Without this the bf16 logits of every position exist at once (about
+0.5 MB per token for Gemma's 262k vocabulary, 2 GB at 4,096 tokens). Running long sequences in `prefill_step` chunks through the single-sequence caches would
+bound the layers' memory too, and was tried: in bf16 on the GPU the kernels' arithmetic depends
+on the sequence length, and Gemma 4 E4B's scores moved by up to 0.74 against a plain forward once
 prompts passed 512 tokens. Candidates inside a token, or that span several tokens, cost one more
 forward each
 (two per site for the shared prefix piece). Reusing a stored prefix was left out: the
