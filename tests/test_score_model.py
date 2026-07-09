@@ -118,6 +118,27 @@ def test_score_matches_a_direct_mlx_lm_forward(loaded):
             assert abs(r.logprobs[c] - lp[c]) < TOL, (r.char_offset, c, r.logprobs[c], lp[c])
 
 
+# Past 1,000 tokens, well beyond Gemma 4's 512-token sliding window and mlx-lm's 512-token
+# prefill step. Scoring once ran long sequences in chunks and drifted by up to 0.74 here.
+CITIES = ["Paris", "Rome", "Oslo", "Lisbon", "Vienna", "Prague", "Dublin", "Madrid"]
+LONG_MSG = [MSG[0], {"role": "user", "content": " ".join(
+    f"[{i + 1}] {CITIES[i % len(CITIES)]} guide, part {i // len(CITIES) + 1}: opening hours, "
+    f"ticket prices, the nearest metro stations and a short history of the old town."
+    for i in range(48)) + " Where is the Eiffel Tower?"}]
+
+
+def test_long_prompt_score_matches_a_direct_mlx_lm_forward(loaded):
+    s = sites()
+    head = loaded.chat_text(LONG_MSG)
+    assert len(loaded.tokenizer.encode(head + CONT)) > 1000
+    got = score(loaded.tokenizer, loaded.runner.logprob_rows, head, CONT, s, 4096)[0]
+    ref = mlx_scorer_reference(loaded, LONG_MSG, CONT, s)
+    for r, (t, lp) in zip(got, ref, strict=True):
+        assert r.token_index == t
+        for c in lp:
+            assert abs(r.logprobs[c] - lp[c]) < TOL, (r.char_offset, c, r.logprobs[c], lp[c])
+
+
 def test_sites_scored_together_equal_sites_scored_alone(loaded):
     s = sites()
     together = run(loaded, s)
