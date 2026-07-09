@@ -309,7 +309,9 @@ Qwen3.5, Gemma 4): the layers and the final norm run once over the whole sequenc
 requested rows' hidden states go through the LM head (or the tied embedding) and Gemma's final
 logit softcap. The rows are padded to at least 64 by repeating the last one, so the head's matmul
 stays a matrix-matrix product as in the full forward, and sequences of 64 tokens or fewer just
-take the plain forward. Without this the bf16 logits of every position exist at once (about
+take the plain forward. On the 4-bit checkpoints at about 1,470 tokens (M1 Pro GPU) the padded
+rows equal the full forward's bit for bit; with the head on just the 4 rows asked for they
+differed by up to 0.21 (Gemma 4 E4B), 0.44 (Gemma 4 12B) and 0.12 (Qwen3.5 9B). Without this the bf16 logits of every position exist at once (about
 0.5 MB per token for Gemma's 262k vocabulary, 2 GB at 4,096 tokens). Running long sequences in `prefill_step` chunks through the single-sequence caches would
 bound the layers' memory too, and was tried: in bf16 on the GPU the kernels' arithmetic depends
 on the sequence length, and Gemma 4 E4B's scores moved by up to 0.74 against a plain forward once
