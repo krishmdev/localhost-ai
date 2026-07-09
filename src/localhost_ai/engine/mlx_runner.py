@@ -226,36 +226,21 @@ class MLXModelRunner:
         return MLXBatch(state.cache, [state.lengths[i] for i in keep])
 
     def logprob_rows(self, ids: list[int], rows: list[int]) -> torch.Tensor:
-        """Next-token log-probabilities after each of `rows` of one sequence (for /v1/score).
-        Up to `prefill_step` tokens this is one cache-free forward; a longer sequence runs in
-        `prefill_step` chunks through the model's single-sequence caches and stops after the
-        last requested row, so the full-vocabulary logits held at once are bounded by the chunk
-        (Gemma's 262k vocabulary is about 0.5 MB per token in bf16). Only the requested rows
-        are cast to float32 and normalized."""
-        if len(ids) <= self.prefill_step:
-            logits = self.model(mx.array([ids], dtype=mx.int32))[0]
-            sel = logits[mx.array(rows, dtype=mx.int32)].astype(mx.float32)
-            out = sel - mx.logsumexp(sel, axis=-1, keepdims=True)
-            mx.eval(out)
-            del logits
-            return torch.from_numpy(np.array(out))
-        cache = make_prompt_cache(self.model)
-        x = mx.array([ids], dtype=mx.int32)
-        got: dict[int, mx.array] = {}
-        step = self.prefill_step
-        for i in range(0, max(rows) + 1, step):
-            logits = self.model(x[:, i:i + step], cache=cache)[0]
-            want = sorted({r for r in rows if i <= r < i + step})
-            if want:
-                sel = logits[mx.array([r - i for r in want], dtype=mx.int32)].astype(mx.float32)
-                sel = sel - mx.logsumexp(sel, axis=-1, keepdims=True)
-                for j, r in enumerate(want):
-                    got[r] = sel[j]
-                mx.eval(sel)
-            mx.eval([c.state for c in cache])
-            del logits
-        out = mx.stack([got[r] for r in rows])
+        """Next-token log-probabilities after each of `rows` of one sequence, from one forward
+        pass with no cache (for /v1/score). Only the requested rows are cast to float32 and
+        normalized.
+
+        The whole sequence goes through the model at once on purpose: the client checks the
+        result against a plain mlx-lm forward, and in bf16 on the GPU the kernels' arithmetic
+        depends on the sequence length, so running the same tokens in prefill_step chunks moved
+        Gemma 4 E4B's log-probabilities by up to 0.74 past 512 tokens. The cost is that the bf16
+        logits of every position are held until the rows are picked out: about 0.5 MB per token
+        for Gemma's 262k vocabulary (0.5 GB at 1,000 tokens, 2 GB at 4,096)."""
+        logits = self.model(mx.array([ids], dtype=mx.int32))[0]
+        sel = logits[mx.array(rows, dtype=mx.int32)].astype(mx.float32)
+        out = sel - mx.logsumexp(sel, axis=-1, keepdims=True)
         mx.eval(out)
+        del logits
         return torch.from_numpy(np.array(out))
 
     def row_bytes(self, tokens: int) -> int:
