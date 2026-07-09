@@ -304,10 +304,13 @@ as text, and `score()` tokenizes prompt plus continuation together with offsets,
 to the first token that ends past it, and asks the runner for next-token log-probabilities at
 the rows it needs. `logprob_rows` is one forward over the whole sequence with no cache. The
 torch runner passes the rows as `logits_to_keep`, so only they go through the LM head. The MLX
-runner casts only the requested rows to float32 before the log-softmax; past `prefill_step`
-(512) tokens it runs the sequence in chunks through the model's single-sequence caches and
-stops after the last requested row, so the bf16 logits held at once are at most 512 x vocab
-(about 0.27 GB for Gemma's 262k vocabulary) instead of the whole sequence's. Candidates inside a token, or that span several tokens, cost one more forward each
+runner casts only the requested rows to float32 before the log-softmax, but the bf16 logits of
+the whole sequence exist until then (about 0.5 MB per token for Gemma's 262k vocabulary, 2 GB
+at 4,096 tokens). Running long sequences in `prefill_step` chunks through the single-sequence
+caches would bound that, and was tried: in bf16 on the GPU the kernels' arithmetic depends on
+the sequence length, and Gemma 4 E4B's scores moved by up to 0.74 against a plain forward once
+prompts passed 512 tokens. Candidates inside a token, or that span several tokens, cost one more
+forward each
 (two per site for the shared prefix piece). Reusing a stored prefix was left out: the
 equivalence with a plain forward is what the client checks, and a cached prefix changes the
 order of the arithmetic.
