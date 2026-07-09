@@ -13,6 +13,7 @@ pinned exactly in pyproject.toml."""
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -121,12 +122,37 @@ def _repeat(c: Any, rows: int) -> Any:
     return type(c).merge([c] * rows)
 
 
+# mlx-lm model classes whose __call__ (checked against the pinned mlx-lm) is exactly
+# `head(self.model(inputs))`, where self.model ends in the final norm and head is lm_head, or the
+# tied embedding's as_linear, then Gemma 4's final logit softcap. Wrappers that only forward to a
+# `language_model` (gemma4.Model, qwen3_5.Model) are unwrapped first.
+_HEADS = frozenset({"mlx_lm.models.llama", "mlx_lm.models.qwen2", "mlx_lm.models.qwen3_5",
+                    "mlx_lm.models.gemma4_text"})
+
+
+def _split_head(model: Any) -> tuple[Any, Any] | None:
+    """(body, head) with head(body(x)) == model(x), or None for an architecture not in _HEADS."""
+    lm = getattr(model, "language_model", model)
+    if type(lm).__module__ not in _HEADS:
+        return None
+    tied = getattr(lm, "tie_word_embeddings", None)
+    if tied is None:
+        tied = lm.args.tie_word_embeddings
+    project = lm.model.embed_tokens.as_linear if tied else lm.lm_head
+    cap = getattr(lm, "final_logit_softcapping", None)
+    if cap is None:
+        return lm.model, project
+    softcap = sys.modules[type(lm).__module__].logit_softcap  # the model's own function
+    return lm.model, lambda h: softcap(cap, project(h))
+
+
 class MLXModelRunner:
     def __init__(self, model: Any, eos_ids: frozenset[int], prefill_step: int = 512,
                  prefix_cache: PrefixCache | None = None) -> None:
         self.model = model
         self.eos_ids = eos_ids
         self.prefill_step = prefill_step
+        self.head_min_rows = 64  # see logprob_rows
         self.prefix: PrefixCache | None = None
         self.kv_bytes_per_token = 0
         self.row_state_bytes = 0
@@ -227,20 +253,32 @@ class MLXModelRunner:
 
     def logprob_rows(self, ids: list[int], rows: list[int]) -> torch.Tensor:
         """Next-token log-probabilities after each of `rows` of one sequence, from one forward
-        pass with no cache (for /v1/score). Only the requested rows are cast to float32 and
-        normalized.
+        pass with no cache (for /v1/score), normalized in float32.
 
-        The whole sequence goes through the model at once on purpose: the client checks the
-        result against a plain mlx-lm forward, and in bf16 on the GPU the kernels' arithmetic
-        depends on the sequence length, so running the same tokens in prefill_step chunks moved
-        Gemma 4 E4B's log-probabilities by up to 0.74 past 512 tokens. The cost is that the bf16
-        logits of every position are held until the rows are picked out: about 0.5 MB per token
-        for Gemma's 262k vocabulary (0.5 GB at 1,000 tokens, 2 GB at 4,096)."""
-        logits = self.model(mx.array([ids], dtype=mx.int32))[0]
-        sel = logits[mx.array(rows, dtype=mx.int32)].astype(mx.float32)
+        The whole sequence goes through the transformer layers at once on purpose: the client
+        checks the result against a plain mlx-lm forward, and in bf16 on the GPU the kernels'
+        arithmetic depends on the sequence length, so running the same tokens in prefill_step
+        chunks moved Gemma 4 E4B's log-probabilities by up to 0.74 past 512 tokens.
+
+        Only the output head is cut down: for the architectures in _HEADS it runs on the
+        requested rows' hidden states (after the model's final norm), so the logits of every
+        position (0.5 MB per token for Gemma's 262k vocabulary) never exist. The rows are padded
+        to at least head_min_rows by repeating the last one, so the head's matmul has the same
+        kernel shape class as in the full forward (a handful of rows would go to the
+        matrix-vector kernel instead, which sums in a different order); sequences shorter than
+        that take the plain forward."""
+        x = mx.array([ids], dtype=mx.int32)
+        split = _split_head(self.model)
+        if split is None or not rows or len(ids) <= self.head_min_rows:
+            logits = self.model(x)[0][mx.array(rows, dtype=mx.int32)]
+        else:
+            body, head = split
+            take = rows + [rows[-1]] * (self.head_min_rows - len(rows))
+            h = body(x)[:, mx.array(take, dtype=mx.int32)]
+            logits = head(h)[0, : len(rows)]
+        sel = logits.astype(mx.float32)
         out = sel - mx.logsumexp(sel, axis=-1, keepdims=True)
         mx.eval(out)
-        del logits
         return torch.from_numpy(np.array(out))
 
     def row_bytes(self, tokens: int) -> int:

@@ -434,3 +434,100 @@ def test_long_logprob_rows_are_one_forward_and_equal_a_plain_forward(request, na
     assert spy.calls == [((1, len(ids)), None)]
     assert got.shape == (len(rows), ref.shape[1])
     assert torch.equal(got, ref[rows])
+
+
+def _variant(name):
+    """Tiny models whose output head differs: tied and untied, dense and 4-bit, Gemma's softcap
+    (fp32 and bf16), the hybrid stack, and the language_model wrappers of Gemma 4 and Qwen3.5."""
+    from mlx.utils import tree_map
+    from mlx_lm.models import gemma4, qwen3_5
+
+    if name.startswith("llama"):
+        mx.random.seed(0)
+        model = llama.Model(llama.ModelArgs(
+            model_type="llama", hidden_size=64, num_hidden_layers=2, intermediate_size=128,
+            num_attention_heads=4, num_key_value_heads=2, rms_norm_eps=1e-5, vocab_size=VOCAB,
+            tie_word_embeddings="untied" not in name))
+        if name.endswith("bf16"):
+            model.update(tree_map(lambda p: p.astype(mx.bfloat16), model.parameters()))
+        if "q4" in name:
+            import mlx.nn as nn
+
+            nn.quantize(model, group_size=64, bits=4)  # scales stay in the model's dtype
+    elif name.startswith("gemma"):
+        model = tiny_gemma4()
+        if "wrapped" in name:
+            outer = gemma4.Model(gemma4.ModelArgs(model_type="gemma4", text_config={}))
+            outer.language_model = model
+            model = outer
+    elif name == "qwen3_5_wrapped":
+        outer = qwen3_5.Model(qwen3_5.ModelArgs(model_type="qwen3_5", text_config={
+            "model_type": "qwen3_5_text", "hidden_size": 64, "intermediate_size": 128,
+            "num_hidden_layers": 4, "num_attention_heads": 4, "num_key_value_heads": 2,
+            "head_dim": 16, "vocab_size": VOCAB, "linear_num_value_heads": 4,
+            "linear_num_key_heads": 2, "linear_key_head_dim": 16, "linear_value_head_dim": 16,
+            "full_attention_interval": 2}))
+        outer.language_model = tiny_qwen3_5()
+        model = outer
+    if name.endswith("bf16") and not name.startswith("llama"):
+        model.update(tree_map(lambda p: p.astype(mx.bfloat16), model.parameters()))
+    mx.eval(model.parameters())
+    return model
+
+
+VARIANTS = ["llama", "llama_untied", "llama_q4", "llama_untied_q4", "gemma", "gemma_bf16",
+            "gemma_wrapped", "qwen3_5_wrapped", "llama_q4_bf16"]
+
+
+@pytest.mark.parametrize("name", VARIANTS)
+def test_split_head_is_the_models_own_output_path(name):
+    """head(body(x)) is model(x) bit for bit: the final norm stays in the body, and the head is
+    lm_head or the tied embedding, then Gemma's softcap."""
+    from localhost_ai.engine.mlx_runner import _split_head
+
+    model = _variant(name)
+    x = mx.array([PROMPTS[0] + FORCED[0] + PROMPTS[3]], dtype=mx.int32)
+    body, head = _split_head(model)
+    a, b = model(x), head(body(x))
+    assert a.dtype == b.dtype and mx.array_equal(a, b).item()
+
+
+@pytest.mark.parametrize("name", VARIANTS)
+@pytest.mark.parametrize("rows", [[21, 0, 5, 6], list(range(22))[::-1]])
+def test_logprob_rows_head_on_the_rows_equals_the_full_forward(name, rows, monkeypatch):
+    """Past head_min_rows tokens the head runs only on the requested rows' hidden states (padded
+    to head_min_rows, or not padded when there are more rows than that). On CPU that equals the
+    plain full forward's rows bit for bit, in fp32 and bf16, and the layers still run once over
+    the whole sequence with no cache."""
+    from localhost_ai.engine import mlx_runner
+
+    model = _variant(name)
+    r = MLXModelRunner(model, eos_ids=frozenset({0}))
+    r.head_min_rows = 8
+    ids = PROMPTS[0] + FORCED[0] + PROMPTS[3] + FORCED[1]
+    logits = model(mx.array([ids], dtype=mx.int32))[0].astype(mx.float32)
+    ref = torch.from_numpy(np.array(logits - mx.logsumexp(logits, axis=-1, keepdims=True)))
+
+    split, seen = mlx_runner._split_head, []
+
+    def spied(m):
+        body, head = split(m)
+        return (lambda x, cache=None: seen.append((tuple(x.shape), cache)) or body(x)), head
+
+    monkeypatch.setattr(mlx_runner, "_split_head", spied)
+    got = r.logprob_rows(ids, rows)
+    assert seen == [((1, len(ids)), None)]
+    assert got.shape == (len(rows), VOCAB)
+    assert torch.equal(got, ref[rows])
+
+
+def test_logprob_rows_takes_the_plain_forward_for_unknown_heads_and_short_sequences(runner):
+    from localhost_ai.engine.mlx_runner import _split_head
+
+    assert _split_head(_Calls(runner.model)) is None
+    ids = PROMPTS[0] + FORCED[0]
+    assert len(ids) <= runner.head_min_rows
+    r = MLXModelRunner(runner.model, eos_ids=frozenset({0}))
+    r.model = spy = _Calls(runner.model)
+    r.logprob_rows(ids, [0, 3])
+    assert spy.calls == [((1, len(ids)), None)]
