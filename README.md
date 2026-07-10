@@ -370,6 +370,11 @@ Environment variables, prefix `LHAI_` (see `src/localhost_ai/config.py`):
   of a prompt prefix that recent requests share, such as a long system prompt.
 - `ADMIN_TOKEN`, `ALLOWED_HOSTS`, `ALLOWED_ORIGINS`.
 - `MEM_LIMIT_BYTES`: pretend-budget for native runs.
+- `MLX_CACHE_LIMIT_MB` (1536): cap on MLX's cache of freed buffers, set when an MLX model
+  loads; 0 leaves MLX's default, which lets it grow to the whole memory limit. Without the cap
+  a qwen3.5-9b-mlx4 server on a 16 GB Mac reached about 12 GB of process footprint while the
+  model needs about 7 GB (5.5 GB of weights, about 1.6 GB of KV and recurrent state for 8 rows).
+  The value shows up in `lhai_model_info` and the admin model info.
 - `ADAPTERS`: LoRA adapters for the startup model (MLX presets), `name=path,name2=path2`.
 
 Models are pinned in `models.yaml` (repo and commit) and hashed in `models.lock`.

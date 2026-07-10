@@ -153,6 +153,14 @@ Differences from the torch path:
 - **Wired memory.** On load the wired limit is raised to Metal's recommended working set, as
   mlx-lm's own generate does, so a large model's weights aren't paged out between steps. It's a
   cap, not a reservation.
+- **Buffer cache cap.** MLX keeps freed buffers in an allocator cache for reuse, and by default
+  that cache may grow to the whole memory limit. A qwen3.5-9b-mlx4 server with 8 rows on a
+  16 GB Mac reached about 12 GB of process footprint, against about 7 GB for what it holds
+  (5.5 GB of weights plus about 1.6 GB of KV and recurrent state); the rest was cached free
+  buffers, and the pressure was enough for macOS to restart system daemons such as securityd.
+  So the loader calls `mx.set_cache_limit` with `LHAI_MLX_CACHE_LIMIT_MB` (1536 MiB by
+  default; 0 leaves it uncapped). Past the cap, freed buffers go back to the OS instead of
+  being kept.
 - **Hot-swap frees first.** The old runner and tokenizer are dropped and MLX's buffer cache is
   cleared before the next model loads, after waiting for the compute thread to finish its step.
   Otherwise both sets of weights are resident during the load.
