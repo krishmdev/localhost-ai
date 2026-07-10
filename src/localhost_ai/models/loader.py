@@ -84,12 +84,13 @@ def _eos_ids(tokenizer: Any, model: Any) -> frozenset[int]:
 
 def load(spec: ModelSpec, dev: DeviceConfig, models_dir: Path, quantization: str = "none",
          dtype_override: str = "auto",
-         adapters: list[tuple[str, str]] | None = None) -> LoadedModel:
+         adapters: list[tuple[str, str]] | None = None,
+         mlx_cache_limit_mb: int = 0) -> LoadedModel:
     if spec.backend == "mlx":
         if quantization != "none":
             raise RuntimeError(f"quantization={quantization} applies to torch presets; "
                                f"{spec.name} is an MLX checkpoint that is already quantized")
-        return load_mlx(spec, models_dir, adapters)
+        return load_mlx(spec, models_dir, adapters, mlx_cache_limit_mb)
     if adapters:
         raise RuntimeError(f"LoRA adapters are served on MLX presets only; {spec.name} is a "
                            "torch preset")
@@ -180,7 +181,8 @@ def _mlx_model_classes(config: dict) -> tuple[Any, Any]:
 
 
 def load_mlx(spec: ModelSpec, models_dir: Path,
-             adapters: list[tuple[str, str]] | None = None) -> LoadedModel:
+             adapters: list[tuple[str, str]] | None = None,
+             cache_limit_mb: int = 0) -> LoadedModel:
     try:
         import mlx.core as mx
         from mlx.utils import tree_flatten
@@ -213,6 +215,11 @@ def load_mlx(spec: ModelSpec, models_dir: Path,
         # so a large model's weights aren't paged out between steps under memory pressure. It
         # is a cap on wired memory, not a reservation, and applies to the whole process.
         mx.set_wired_limit(working_set)
+    if cache_limit_mb > 0:
+        # MLX keeps freed buffers in its allocator cache for reuse, and by default that cache
+        # may grow to the whole memory limit. Capping it trades some re-allocation for a
+        # process footprint that stays near what the weights and live state need.
+        mx.set_cache_limit(cache_limit_mb << 20)
     eos = _eos_from_files(path, tokenizer)
     names: list[str] = []
     if adapters:

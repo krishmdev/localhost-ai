@@ -67,6 +67,15 @@ def test_load_mlx_happy_path(checkpoint):
     assert logits.shape == (1, 128) and m.runner.kv_bytes(state) > 0
 
 
+@pytest.mark.parametrize("limit_mb,expected", [(1536, [1536 << 20]), (0, [])])
+def test_load_mlx_caps_the_buffer_cache(checkpoint, monkeypatch, limit_mb, expected):
+    calls: list[int] = []
+    monkeypatch.setattr(mx, "set_cache_limit", calls.append)  # process-wide; don't really set it
+    dev = DeviceConfig(torch.device("cpu"), torch.float32, threads=1)
+    loader.load(spec(quantization="mlx4"), dev, checkpoint.parent, mlx_cache_limit_mb=limit_mb)
+    assert calls == expected
+
+
 def test_load_mlx_rejects_a_wrong_quantization_label(checkpoint):
     dev = DeviceConfig(torch.device("cpu"), torch.float32, threads=1)
     with pytest.raises(RuntimeError, match="says mlx8, the checkpoint's config.json says mlx4"):

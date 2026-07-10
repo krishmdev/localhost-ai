@@ -196,7 +196,8 @@ def build_from_settings(s: Settings) -> Service:
         spec = registry.get(name)
         # LHAI_ADAPTERS belong to the startup model; a hot-swapped model loads without them
         adapters = parse_adapters(s.adapters) if spec.name == registry.get(s.model).name else []
-        m = load(spec, dev, s.models_dir, s.quantization, s.dtype, adapters)
+        m = load(spec, dev, s.models_dir, s.quantization, s.dtype, adapters,
+                 s.mlx_cache_limit_mb)
         if s.prefix_cache:
             m.runner.prefix = PrefixCache(budget_bytes=s.prefix_cache_mb << 20,
                                           min_tokens=s.prefix_min_tokens)
@@ -214,7 +215,10 @@ def build_from_settings(s: Settings) -> Service:
                   "kv_bytes_per_token": str(m.runner.kv_bytes_per_token),
                   "row_state_bytes": str(getattr(m.runner, "row_state_bytes", 0)),
                   "prefix_cache": f"{s.prefix_cache_mb} MiB" if s.prefix_cache else "off",
-                  "adapters": ",".join(m.adapters)},
+                  "adapters": ",".join(m.adapters),
+                  "mlx_cache_limit": (("off" if not s.mlx_cache_limit_mb
+                                       else f"{s.mlx_cache_limit_mb} MiB")
+                                      if spec.backend == "mlx" else "n/a")},
         )
 
     parts = loader(s.model)

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Optional cap on the memory the probe reports as available (bytes). Lets you run the
     # memory-pressure scenario natively without a container limit.
     mem_limit_bytes: int = 0
+    # Cap on MLX's cache of freed buffers (MiB), set when an MLX model loads; 0 leaves MLX's
+    # default, which lets the cache grow to the whole memory limit.
+    mlx_cache_limit_mb: int = Field(1536, ge=0)
 
     max_queue: int = Field(256, ge=1)
     # /v1/score requests waiting for the compute thread; one runs per scheduler iteration
