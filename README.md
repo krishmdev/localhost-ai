@@ -321,7 +321,7 @@ MLX 4-bit presets on the same Mac (runner-only decode, 128 greedy steps; served 
 
 NVIDIA CUDA: not measured (no NVIDIA GPU here). The Docker CPU sweep ran on a contended host; its rough numbers are in RESULTS.md only.
 
-Memory pressure, same-session pair, recorded 2026-09-25 and stored in 1e23a03 (the manifest has no code commit; the scheduler has changed since). CPU container capped at 1500m, 32 clients, 512 tokens each, 60 s:
+Memory pressure, same-session pair, recorded 2026-09-25 and stored in 8fc432d (the manifest has no code commit; the scheduler has changed since). CPU container capped at 1500m, 32 clients, 512 tokens each, 60 s:
 
 - fixed:32: not OOM-killed, 32 tok/s, 7 requests finished inside the window, 0 failed.
 - aimd: not OOM-killed, 37 tok/s, 5 requests finished inside the window, 0 failed.
@@ -415,7 +415,7 @@ caches work and what differs from the torch path.
   tests, on Qwen2.5, which has no thinking markers). On `gemma-4-12b-mlx4`: 12 passed and the
   batched greedy check is an expected failure: one prompt of five drifts at token 22, which
   fits the seed check in bench/RESULTS.md. Both counts are from 2026-09-27 on the code at
-  d06b0d9; the runs left no committed log.
+  274ac53; the runs left no committed log.
 - `make test-model` runs on the real SmolLM2-135M on CPU fp32:
   - Five mixed-length prompts with a mid-stream join produce exactly the same 32 greedy tokens
     batched as one at a time.
@@ -489,7 +489,7 @@ caches work and what differs from the torch path.
     longest recent request, and a low ceiling estimate ratcheted L down while admitted rows
     drained. With those, AIMD fell to L = 1 and requests timed out.
   - Both are fixed, with tests.
-  - In the latest same-session pair (stored in 1e23a03, before later scheduler changes), AIMD
+  - In the latest same-session pair (stored in 8fc432d, before later scheduler changes), AIMD
     produced 37 tok/s against 32 for fixed:32, with no errors among the requests that finished
     inside the 60 s window. The runs drained in 365 s (fixed:32) and about 435 s (AIMD), below
     the 600 s request timeout behind the earlier failures.
