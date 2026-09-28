@@ -12,13 +12,13 @@ leaks = [k for k, v in probe(2.0).items() if v == "open"]
 assert not leaks, f"egress open: {leaks}"
 
 svc = build_from_settings(Settings())
-with TestClient(create_app(svc)) as c:
+with TestClient(create_app(svc), base_url="http://localhost") as c:
     r = c.post("/v1/chat/completions", json={
         "messages": [{"role": "user", "content": "Name three planets."}],
         "max_tokens": 16, "temperature": 0})
     r.raise_for_status()
     print("rest:", r.json()["choices"][0]["message"]["content"][:60])
-    with c.websocket_connect("/v1/ws/generate") as ws:
+    with c.websocket_connect("ws://localhost/v1/ws/generate") as ws:
         ws.send_json({"type": "generate", "id": "a", "max_tokens": 8,
                       "messages": [{"role": "user", "content": "Say hi."}]})
         while (m := ws.receive_json())["type"] != "done":
